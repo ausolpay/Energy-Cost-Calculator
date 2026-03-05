@@ -238,8 +238,13 @@
   }
   .primary:hover{ background:#4a4a4a; }
 
+  .detailsActions{
+    display:flex;
+    justify-content:flex-end;
+    gap:6px;
+    margin-bottom:6px;
+  }
   .editBtn{
-    float:right;
     background:#2a2a2a;
     border:none;
     color:#fff;
@@ -247,14 +252,12 @@
     border-radius:6px;
     font-size:12px;
     cursor:pointer;
-    margin-bottom:6px; /* space under Edit button */
   }
   .editBtn:hover{
     background:#3a3a3a;
   }
 
   .deleteBtn{
-    float:right;
     background:#2a2a2a;
     border:none;
     color:#fff;
@@ -262,8 +265,6 @@
     border-radius:6px;
     font-size:12px;
     cursor:pointer;
-    margin-right:6px; /* gap between Delete and Edit */
-    margin-bottom:6px;
   }
   .deleteBtn:hover{
     background:#3a3a3a;
@@ -890,8 +891,6 @@
     const periodEstimate = costHr * periodHours;
 
     document.getElementById("details").innerHTML = `
-      <button type="button" class="editBtn" onclick="openEditModal()">Edit</button>
-      <button type="button" class="deleteBtn" onclick="deleteCurrentReading()">Delete</button>
       <b>Full Details (${evMode ? "-EV" : "All"})</b><br><br>
       Date: ${date} &nbsp; Time: ${time}<br>
       Tariff: ${r.tariff || "-"}<br><br>
@@ -909,7 +908,12 @@
       Tariff period estimate: $${periodEstimate.toFixed(2)}<br><br>
 
       Daily house estimate: $${daily.toFixed(2)}<br>
-      Monthly house estimate: $${monthly.toFixed(0)}
+      Monthly house estimate: $${monthly.toFixed(0)}<br><br>
+
+      <div class="detailsActions">
+        <button type="button" class="deleteBtn" onclick="deleteCurrentReading()">Delete</button>
+        <button type="button" class="editBtn" onclick="openEditModal()">Edit</button>
+      </div>
     `;
   }
 
