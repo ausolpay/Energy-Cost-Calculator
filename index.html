@@ -152,6 +152,36 @@
   .switch input:checked + .slider{ background:#4cafef; }
   .switch input:checked + .slider:before{ transform:translateX(26px); }
 
+  .evRow{
+    display:flex;
+    gap:8px;
+    align-items:flex-start;
+  }
+  .evCol{
+    flex:1;
+  }
+  .evTimes{
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+    flex:1.1;
+  }
+  .evTimeRow{
+    display:flex;
+    align-items:center;
+    gap:4px;
+  }
+  .evTimeLabel{
+    font-size:11px;
+    color:#aaa;
+    min-width:28px;
+    text-align:right;
+  }
+  .evTimes input[type="time"]{
+    padding:6px 8px;
+    font-size:13px;
+  }
+
   #settingsView{ display:none; }
   .panel{
     background:#1b1b1b;
@@ -227,7 +257,21 @@
   <input id="amps" type="number" placeholder="Enter Amps" step="any" min="0">
   <div class="spacer"></div>
 
-  <input id="evkw" type="number" placeholder="Optional EV usage (kW) e.g. 7.1" step="any" min="0">
+  <div class="evRow">
+    <div class="evCol">
+      <input id="evkw" type="number" placeholder="Optional EV usage (kW) e.g. 7.1" step="any" min="0">
+    </div>
+    <div class="evTimes">
+      <div class="evTimeRow">
+        <span class="evTimeLabel">from</span>
+        <input id="evFrom" type="time">
+      </div>
+      <div class="evTimeRow">
+        <span class="evTimeLabel">to</span>
+        <input id="evTo" type="time">
+      </div>
+    </div>
+  </div>
   <div class="spacer"></div>
 
   <button id="calcBtn" type="button" onclick="calculate()">Calculate</button>
@@ -442,25 +486,82 @@
     return {offHours, peakHours, shoulderHours};
   }
 
-  function computeDailyMonthlyFromKW(adjKW){
-    // Given an adjusted kW, compute a blended daily and monthly estimate
-    // using all tariff windows over a 24h day.
+  function parseTimeToMinutes(t){
+    if(!t) return null;
+    const [h,m] = t.split(":");
+    const hh = parseInt(h,10);
+    const mm = parseInt(m,10);
+    if(Number.isNaN(hh) || Number.isNaN(mm)) return null;
+    return hh*60 + mm;
+  }
+
+  function diffHours(startStr, endStr){
+    const s = parseTimeToMinutes(startStr);
+    const e = parseTimeToMinutes(endStr);
+    if(s === null || e === null) return null;
+    let diff = e - s;
+    if(diff < 0) diff += 24*60; // allow wrap past midnight
+    return diff/60;
+  }
+
+  function computeDailyMonthlyForReading(r){
+    const baseKW = Number(r.kw || 0);
+    const evKW = Number(r.ev || 0);
+    const houseKW = Math.max(0, baseKW - evKW);
+
     let daily = 0;
 
     if(settings.tariffType === "fixed"){
       const rate = Number(settings.fixedRate || 0);
-      daily = adjKW * rate * 24;
+      const evFrom = r.evFrom || "";
+      const evTo = r.evTo || "";
+      const diff = diffHours(evFrom, evTo);
+      const chargeHours = diff !== null ? diff : 24;
+
+      if(evMode){
+        // -EV mode: only house usage
+        daily = houseKW * rate * 24;
+      } else {
+        // All mode: house all day + EV only during charge window
+        daily = (houseKW * rate * 24) + (evKW * rate * chargeHours);
+      }
     } else {
       const {offHours, peakHours, shoulderHours} = getTariffDurations();
       const offRate = Number(settings.offRate || 0);
       const peakRate = Number(settings.peakRate || 0);
       const shoulderRate = Number(settings.shoulderRate || 0);
 
-      daily = adjKW * (
+      // House usage across whole day spread over all windows
+      daily = houseKW * (
         offRate * offHours +
         peakRate * peakHours +
         shoulderRate * shoulderHours
       );
+
+      // EV only in its tariff window, for its charge hours (or full window if times missing)
+      if(!evMode && evKW > 0){
+        const evFrom = r.evFrom || "";
+        const evTo = r.evTo || "";
+        const diff = diffHours(evFrom, evTo);
+
+        let windowHours = 0;
+        let windowRate = 0;
+        if(r.tariff === "OffPeak"){
+          windowHours = offHours;
+          windowRate = offRate;
+        } else if(r.tariff === "Peak"){
+          windowHours = peakHours;
+          windowRate = peakRate;
+        } else {
+          windowHours = shoulderHours;
+          windowRate = shoulderRate;
+        }
+
+        const chargeHours = diff !== null ? Math.min(windowHours || 0, diff) : windowHours;
+        if(chargeHours > 0){
+          daily += evKW * windowRate * chargeHours;
+        }
+      }
     }
 
     const monthly = daily * 30;
@@ -504,6 +605,8 @@
   function calculate(){
     const ampsInput = document.getElementById("amps");
     const evInput = document.getElementById("evkw");
+    const evFromInput = document.getElementById("evFrom");
+    const evToInput = document.getElementById("evTo");
 
     const amps = parseFloat(ampsInput.value);
     if(!(amps || amps === 0)) return;
@@ -521,6 +624,8 @@
       amps: amps,
       kw: kw,
       ev: ev,
+      evFrom: evFromInput.value || "",
+      evTo: evToInput.value || "",
       rate: rate,
       tariff: tariff
     };
@@ -534,6 +639,8 @@
     // Clear inputs after successful calculation
     ampsInput.value = "";
     evInput.value = "";
+    evFromInput.value = "";
+    evToInput.value = "";
 
     renderHistory();
     renderAvg();
@@ -604,8 +711,9 @@
     const rate = Number(r.rate || 0);
     const costHr = adjustedCostPerHour(r);
 
-    // Blended daily/monthly using all tariff windows across a day
-    const {daily, monthly} = computeDailyMonthlyFromKW(adjKW);
+    // Blended daily/monthly using all tariff windows across a day,
+    // with EV only during its charge window in the current tariff.
+    const {daily, monthly} = computeDailyMonthlyForReading(r);
 
     // Period estimate for the current tariff window (e.g. OffPeak / Peak / Shoulder)
     let periodHours = 24;
@@ -636,6 +744,7 @@
       Rate ($/kWh): $${rate}<br>
       Cost/hr: $${costHr.toFixed(4)}<br><br>
 
+      EV charge window: ${r.evFrom && r.evTo ? `${r.evFrom}–${r.evTo}` : "n/a"}<br>
       Tariff period estimate: $${periodEstimate.toFixed(2)}<br><br>
 
       Daily house estimate: $${daily.toFixed(2)}<br>
@@ -657,12 +766,14 @@
 
     let off = 0, peak = 0, shoulder = 0, fixed = 0;
     let countOff = 0, countPeak = 0, countShoulder = 0, countFixed = 0;
-    let totalAdjKWAll = 0;
+    let sumDaily = 0;
+    let sumMonthly = 0;
 
     rows.forEach(r=>{
-      let cost = adjustedCostPerHour(r);
-      const adj = adjustedKW(r);
-      totalAdjKWAll += adj;
+      const cost = adjustedCostPerHour(r);
+      const blended = computeDailyMonthlyForReading(r);
+      sumDaily += blended.daily;
+      sumMonthly += blended.monthly;
 
       if(settings.tariffType === "fixed"){
         fixed += cost;
@@ -686,11 +797,8 @@
     let avgShoulder = countShoulder ? shoulder/countShoulder : 0;
     let avgFixed = countFixed ? fixed/countFixed : 0;
 
-    // Use average adjusted kW across all readings and blend over the day
-    const avgAdjKWAll = totalAdjKWAll / rows.length;
-    const blended = computeDailyMonthlyFromKW(avgAdjKWAll);
-    const daily = blended.daily;
-    const monthly = blended.monthly;
+    const daily = sumDaily / rows.length;
+    const monthly = sumMonthly / rows.length;
     const totalAvg = daily / 24;
 
     let tariffHTML = "";
@@ -732,8 +840,10 @@
     const months = {};
     history.forEach(r=>{
       const m = new Date(r.time).getMonth();
-      if(!months[m]) months[m] = {totalKW:0, count:0};
-      months[m].totalKW += adjustedKW(r);
+      if(!months[m]) months[m] = {sumDaily:0, sumMonthly:0, count:0};
+      const blended = computeDailyMonthlyForReading(r);
+      months[m].sumDaily += blended.daily;
+      months[m].sumMonthly += blended.monthly;
       months[m].count++;
     });
 
@@ -742,11 +852,9 @@
 
     Object.keys(months).sort((a,b)=>a-b).forEach(mStr=>{
       const m = parseInt(mStr,10);
-      const avgKW = months[m].totalKW / months[m].count;
-      const blended = computeDailyMonthlyFromKW(avgKW);
-      const daily = blended.daily;
-      const monthly = blended.monthly;
-      const avgCostHr = daily / 24;
+      const avgDaily = months[m].sumDaily / months[m].count;
+      const avgMonthly = months[m].sumMonthly / months[m].count;
+      const avgCostHr = avgDaily / 24;
 
       const tr = document.createElement("tr");
       tr.onclick = ()=>{
@@ -756,8 +864,8 @@
       tr.innerHTML = `
         <td>${getMonthName(m)}</td>
         <td>$${avgCostHr.toFixed(2)}</td>
-        <td>$${daily.toFixed(0)}</td>
-        <td>$${monthly.toFixed(0)}</td>
+        <td>$${avgDaily.toFixed(0)}</td>
+        <td>$${avgMonthly.toFixed(0)}</td>
       `;
       body.appendChild(tr);
     });
@@ -784,13 +892,12 @@
     for(let i=0;i<12;i++){
       const rows = history.filter(r => new Date(r.time).getMonth() === i);
       if(rows.length){
-        let totalKW = 0;
+        let sumMonthly = 0;
         rows.forEach(r => {
-          totalKW += adjustedKW(r);
+          const blended = computeDailyMonthlyForReading(r);
+          sumMonthly += blended.monthly;
         });
-        const avgKW = totalKW / rows.length;
-        const blended = computeDailyMonthlyFromKW(avgKW);
-        monthlyEstimate[i] = blended.monthly;
+        monthlyEstimate[i] = sumMonthly / rows.length;
       }
     }
 
