@@ -156,6 +156,7 @@
     display:flex;
     gap:8px;
     align-items:flex-start;
+    margin-top:6px; /* space above from/to row */
   }
   .evCol{
     flex:1;
@@ -246,6 +247,7 @@
     border-radius:6px;
     font-size:12px;
     cursor:pointer;
+    margin-bottom:6px; /* space under Edit button */
   }
   .editBtn:hover{
     background:#3a3a3a;
@@ -1043,7 +1045,12 @@
     document.getElementById("tabAvgBtn").classList.toggle("active", tab === "avg");
 
     if(tab === "avg"){
-      renderTotalsDetails();
+      // If a month is selected, keep that month's totals as the default view.
+      if(selectedMonthIndex !== null){
+        renderTotalsDetails(selectedMonthIndex);
+      } else {
+        renderTotalsDetails();
+      }
       drawChart();
     } else {
       if(history.length){
@@ -1067,7 +1074,12 @@
     const rightPad = 10;
     const chartW = cssWidth - leftPad - rightPad;
 
+    // Click outside the chart area: clear selection/label but keep current totals text
     if(x < leftPad || x > leftPad + chartW){
+      if(selectedMonthIndex !== null){
+        selectedMonthIndex = null;
+        drawChart();
+      }
       return;
     }
     const rel = x - leftPad;
