@@ -253,6 +253,22 @@
     background:#3a3a3a;
   }
 
+  .deleteBtn{
+    float:right;
+    background:#2a2a2a;
+    border:none;
+    color:#fff;
+    padding:4px 8px;
+    border-radius:6px;
+    font-size:12px;
+    cursor:pointer;
+    margin-right:6px; /* gap between Delete and Edit */
+    margin-bottom:6px;
+  }
+  .deleteBtn:hover{
+    background:#3a3a3a;
+  }
+
   .evTimes input[type="time"]:disabled{
     background:#262626;
     color:#777;
@@ -875,6 +891,7 @@
 
     document.getElementById("details").innerHTML = `
       <button type="button" class="editBtn" onclick="openEditModal()">Edit</button>
+      <button type="button" class="deleteBtn" onclick="deleteCurrentReading()">Delete</button>
       <b>Full Details (${evMode ? "-EV" : "All"})</b><br><br>
       Date: ${date} &nbsp; Time: ${time}<br>
       Tariff: ${r.tariff || "-"}<br><br>
@@ -1293,6 +1310,43 @@
     renderAvg();
     drawChart();
     renderDetails(history[idx]);
+  }
+
+  function deleteCurrentReading(){
+    if(!history.length) return;
+    const idx = Math.min(Math.max(selectedIndex, 0), history.length - 1);
+    const ok = confirm("Are you sure you want to delete this reading?");
+    if(!ok) return;
+
+    history.splice(idx, 1);
+    localStorage.setItem("history", JSON.stringify(history));
+
+    if(history.length === 0){
+      selectedIndex = 0;
+      renderHistory();
+      renderAvg();
+      drawChart();
+      document.getElementById("details").innerHTML = "No data yet";
+      return;
+    }
+
+    // Clamp selectedIndex to new bounds
+    selectedIndex = Math.min(idx, history.length - 1);
+
+    renderHistory();
+    renderAvg();
+    drawChart();
+
+    const avgVisible = document.getElementById("avgTab").style.display === "block";
+    if(avgVisible){
+      if(selectedMonthIndex !== null){
+        renderTotalsDetails(selectedMonthIndex);
+      } else {
+        renderTotalsDetails();
+      }
+    } else {
+      renderDetails(history[selectedIndex]);
+    }
   }
   function overlayClick(e){
     if(e.target && e.target.id === "exportOverlay"){
