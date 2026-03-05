@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Energy Cost Calculator</title>
+
+<style>
+  body{
+    background:#111;
+    color:#fff;
+    font-family:Arial, sans-serif;
+    margin:0;
+    padding:12px;
+  }
+  h2{ margin:0 0 12px 0; }
+
+  input, button, select{
+    width:100%;
+    box-sizing:border-box;
+    padding:12px;
+    border:none;
+    border-radius:8px;
+    font-size:16px;
+    color:#fff;
+    background:#1f1f1f;
+  }
+  input::placeholder{ color:#aaa; }
+
+  button{
+    background:#2d2d2d;
+    cursor:pointer;
+  }
+  button:hover{ background:#444; }
+
+  .spacer{ height:10px; }
+
+  .controls{
+    display:flex;
+    gap:10px;
+    margin:12px 0 14px 0;
+  }
+  .controls button{
+    flex:1;
+    width:auto;
+  }
+
+  .details{
+    background:#1b1b1b;
+    padding:12px;
+    border-radius:10px;
+    margin-bottom:14px;
+    line-height:1.45;
+  }
+
+  .tabs{
+    display:flex;
+    gap:10px;
+    margin-bottom:10px;
+  }
+  .tab{
+    flex:1;
+    text-align:center;
+    padding:10px;
+    background:#1f1f1f;
+    border-radius:10px;
+    cursor:pointer;
+    user-select:none;
+  }
+  .tab.active{
+    background:#333;
+  }
+
+  table{
+    width:100%;
+    border-collapse:collapse;
+    font-size:13px;
+    table-layout:fixed;
+  }
+  th, td{
+    padding:6px 4px;
+    text-align:center;
+    border-bottom:1px solid #333;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+  tr:hover{ background:#2a2a2a; }
+
+  .pagination{
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    gap:10px;
+    margin-top:10px;
+  }
+  .pagination button{
+    min-width:88px;
+    width:auto;
+  }
+
+  canvas{
+    background:#1b1b1b;
+    border-radius:10px;
+    margin-top:12px;
+    width:100%;
+    display:block;
+  }
+
+  .toggleWrap{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin:0 0 12px 0;
+    padding:10px 12px;
+    background:#1b1b1b;
+    border-radius:10px;
+  }
+  .toggleWrap span{
+    font-size:14px;
+    color:#ddd;
+  }
+  .switch{
+    position:relative;
+    width:52px;
+    height:26px;
+    display:inline-block;
+  }
+  .switch input{ display:none; }
+  .slider{
+    position:absolute;
+    inset:0;
+    background:#444;
+    border-radius:26px;
+    cursor:pointer;
+  }
+  .slider:before{
+    content:"";
+    position:absolute;
+    height:20px;
+    width:20px;
+    left:3px;
+    top:3px;
+    background:#fff;
+    border-radius:50%;
+    transition:.2s;
+  }
+  .switch input:checked + .slider{ background:#4cafef; }
+  .switch input:checked + .slider:before{ transform:translateX(26px); }
+
+  #settingsView{ display:none; }
+  .panel{
+    background:#1b1b1b;
+    padding:12px;
+    border-radius:10px;
+    margin-bottom:12px;
+  }
+  .label{
+    display:block;
+    font-size:13px;
+    color:#cfcfcf;
+    margin:10px 0 6px 0;
+  }
+  .row2{
+    display:flex;
+    gap:10px;
+  }
+  .row2 > div{ flex:1; }
+
+  .modalOverlay{
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,0.65);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:16px;
+    z-index:1000;
+  }
+  .modal{
+    width:100%;
+    max-width:420px;
+    background:#1b1b1b;
+    border:1px solid #2b2b2b;
+    border-radius:12px;
+    padding:14px;
+  }
+  .modal h3{
+    margin:0 0 10px 0;
+    font-size:18px;
+  }
+  .modalActions{
+    display:flex;
+    gap:10px;
+    margin-top:12px;
+  }
+  .modalActions button{
+    flex:1;
+    width:auto;
+  }
+  .primary{
+    background:#3a3a3a;
+  }
+  .primary:hover{ background:#4a4a4a; }
+</style>
+</head>
+
+<body>
+
+<h2>Energy Cost Calculator</h2>
+
+<div class="toggleWrap">
+  <span>Mode: <b id="modeLabel">All</b> <span style="color:#888">(toggle = subtract EV)</span></span>
+  <label class="switch">
+    <input type="checkbox" id="evToggle">
+    <span class="slider"></span>
+  </label>
+</div>
+
+<div id="mainView">
+
+  <input id="amps" type="number" placeholder="Enter Amps" step="any" min="0">
+  <div class="spacer"></div>
+
+  <input id="evkw" type="number" placeholder="Optional EV usage (kW) e.g. 7.1" step="any" min="0">
+  <div class="spacer"></div>
+
+  <button id="calcBtn" type="button" onclick="calculate()">Calculate</button>
+  <div class="spacer"></div>
+
+  <div class="controls">
+    <button type="button" onclick="openSettings()">Settings</button>
+    <button type="button" onclick="openExportModal()">Export CSV</button>
+    <button type="button" onclick="clearHistoryConfirm()">Clear</button>
+  </div>
+
+  <div class="details" id="details">No data yet</div>
+
+  <div class="tabs">
+    <div class="tab active" id="tabHistoryBtn" onclick="showTab('history')">History</div>
+    <div class="tab" id="tabAvgBtn" onclick="showTab('avg')">Total Avg $</div>
+  </div>
+
+  <div id="historyTab">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:18%;">Date</th>
+          <th style="width:18%;">Time</th>
+          <th style="width:12%;">Amps</th>
+          <th style="width:14%;">kW</th>
+          <th style="width:16%;">$/hr</th>
+          <th style="width:22%;">Tariff</th>
+        </tr>
+      </thead>
+      <tbody id="historyBody"></tbody>
+    </table>
+
+    <div class="pagination">
+      <button type="button" onclick="prevPage()">Prev</button>
+      <span id="pageInfo"></span>
+      <button type="button" onclick="nextPage()">Next</button>
+    </div>
+  </div>
+
+  <div id="avgTab" style="display:none;">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:22%;">Month</th>
+          <th style="width:26%;">Avg $/hr</th>
+          <th style="width:26%;">Daily Est</th>
+          <th style="width:26%;">Monthly Est</th>
+        </tr>
+      </thead>
+      <tbody id="avgBody"></tbody>
+    </table>
+
+    <canvas id="chart" height="220"></canvas>
+  </div>
+
+</div>
+
+<div id="settingsView">
+  <div class="panel">
+    <h2 style="margin:0 0 10px 0;">Settings</h2>
+
+    <span class="label">Tariff type</span>
+    <select id="tariffType">
+      <option value="tou">TOU (time-of-use)</option>
+      <option value="fixed">Fixed rate</option>
+    </select>
+
+    <span class="label">Voltage (V)</span>
+    <input id="voltage" type="number" placeholder="e.g. 230" step="any" min="0">
+
+    <div id="touSettings">
+      <span class="label">Off peak window</span>
+      <div class="row2">
+        <div>
+          <span class="label" style="margin-top:0;">Start</span>
+          <input id="offStart" type="time">
+        </div>
+        <div>
+          <span class="label" style="margin-top:0;">End</span>
+          <input id="offEnd" type="time">
+        </div>
+      </div>
+
+      <span class="label">Off peak rate ($/kWh)</span>
+      <input id="offRate" type="number" step="0.0001" min="0">
+
+      <span class="label">Peak window</span>
+      <div class="row2">
+        <div>
+          <span class="label" style="margin-top:0;">Start</span>
+          <input id="peakStart" type="time">
+        </div>
+        <div>
+          <span class="label" style="margin-top:0;">End</span>
+          <input id="peakEnd" type="time">
+        </div>
+      </div>
+
+      <span class="label">Peak rate ($/kWh)</span>
+      <input id="peakRate" type="number" step="0.0001" min="0">
+
+      <span class="label">Shoulder rate ($/kWh)</span>
+      <input id="shoulderRate" type="number" step="0.0001" min="0">
+    </div>
+
+    <div id="fixedSettings" style="display:none;">
+      <span class="label">Fixed rate ($/kWh)</span>
+      <input id="fixedRate" type="number" step="0.0001" min="0">
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="controls">
+      <button type="button" class="primary" onclick="saveSettings()">Save</button>
+      <button type="button" onclick="closeSettings()">Back</button>
+    </div>
+  </div>
+</div>
+
+<div class="modalOverlay" id="exportOverlay" onclick="overlayClick(event)">
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3>Export CSV</h3>
+    <span class="label" style="margin-top:0;">Select range</span>
+    <select id="exportRange">
+      <option value="30">Last 30 days</option>
+      <option value="60">Last 60 days</option>
+      <option value="90">Last 90 days</option>
+      <option value="0">All time</option>
+    </select>
+
+    <div class="modalActions">
+      <button type="button" onclick="closeExportModal()">Cancel</button>
+      <button type="button" class="primary" onclick="confirmExport()">Export</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ===== Storage =====
+  let history = JSON.parse(localStorage.getItem("history") || "[]");
+  let settings = JSON.parse(localStorage.getItem("settings") || JSON.stringify({
+    tariffType:"tou",
+    voltage:230,
+
+    offStart:"11:00",
+    offEnd:"16:00",
+    offRate:0.0772,
+
+    peakStart:"16:00",
+    peakEnd:"21:00",
+    peakRate:0.5736,
+
+    shoulderRate:0.2637,
+
+    fixedRate:0.25
+  }));
+
+  let page = 0;
+  const perPage = 10;
+
+  let evMode = false;
+
+  let selectedIndex = 0;
+
+  // ===== Helpers for TOU =====
+  function parseTime(t){
+    const [h,m] = (t || "00:00").split(":");
+    return (parseInt(h,10)*60) + parseInt(m,10);
+  }
+
+  function getTariff(date){
+    if(settings.tariffType === "fixed") return "Fixed";
+
+    const minutes = date.getHours()*60 + date.getMinutes();
+    const offStart = parseTime(settings.offStart);
+    const offEnd = parseTime(settings.offEnd);
+    const peakStart = parseTime(settings.peakStart);
+    const peakEnd = parseTime(settings.peakEnd);
+
+    if(minutes >= offStart && minutes < offEnd) return "OffPeak";
+    if(minutes >= peakStart && minutes < peakEnd) return "Peak";
+    return "Shoulder";
+  }
+
+  function getRate(date){
+    if(settings.tariffType === "fixed") return settings.fixedRate;
+
+    const t = getTariff(date);
+    if(t === "OffPeak") return settings.offRate;
+    if(t === "Peak") return settings.peakRate;
+    return settings.shoulderRate;
+  }
+
+  // ===== EV adjusters =====
+  function adjustedKW(r){
+    const base = Number(r.kw || 0);
+    const ev = Number(r.ev || 0);
+    if(!evMode) return base;
+    return Math.max(0, base - ev);
+  }
+
+  function adjustedCostPerHour(r){
+    return adjustedKW(r) * Number(r.rate || 0);
+  }
+
+  // ===== UI: Mode Toggle =====
+  document.getElementById("evToggle").addEventListener("change", (e)=>{
+    evMode = e.target.checked;
+    document.getElementById("modeLabel").innerText = evMode ? "-EV" : "All";
+
+    renderHistory();
+    renderAvg();
+    drawChart();
+
+    if(document.getElementById("avgTab").style.display === "block"){
+      renderTotalsDetails();
+    } else {
+      if(history.length){
+        const idx = Math.min(selectedIndex, history.length - 1);
+        renderDetails(history[idx]);
+      } else {
+        document.getElementById("details").innerHTML = "No data yet";
+      }
+    }
+  });
+
+  // ===== Calculate =====
+  function calculate(){
+    const amps = parseFloat(document.getElementById("amps").value);
+    if(!(amps || amps === 0)) return;
+
+    const ev = parseFloat(document.getElementById("evkw").value) || 0;
+
+    const kw = (amps * Number(settings.voltage || 230)) / 1000;
+
+    const now = new Date();
+    const rate = getRate(now);
+    const tariff = getTariff(now);
+
+    const entry = {
+      time: now.toISOString(),
+      amps: amps,
+      kw: kw,
+      ev: ev,
+      rate: rate,
+      tariff: tariff
+    };
+
+    history.unshift(entry);
+    localStorage.setItem("history", JSON.stringify(history));
+
+    page = 0;
+    selectedIndex = 0;
+
+    renderHistory();
+    renderAvg();
+    drawChart();
+    renderDetails(history[0]);
+  }
+
+  // ===== History table =====
+  function renderHistory(){
+    const body = document.getElementById("historyBody");
+    body.innerHTML = "";
+
+    const start = page * perPage;
+    const rows = history.slice(start, start + perPage);
+
+    rows.forEach((r, i)=>{
+      const d = new Date(r.time);
+      const date = d.toLocaleDateString("en-AU",{day:'2-digit',month:'2-digit',year:'2-digit'});
+      const time = d.toLocaleTimeString("en-AU",{hour:'2-digit',minute:'2-digit'});
+
+      const tr = document.createElement("tr");
+      tr.onclick = ()=>{
+        selectedIndex = start + i;
+        renderDetails(r);
+      };
+
+      const kwShow = adjustedKW(r);
+      const costShow = adjustedCostPerHour(r);
+
+      tr.innerHTML = `
+        <td>${date}</td>
+        <td>${time}</td>
+        <td>${r.amps}</td>
+        <td>${kwShow.toFixed(2)}</td>
+        <td>${costShow.toFixed(2)}</td>
+        <td>${r.tariff || "-"}</td>
+      `;
+
+      body.appendChild(tr);
+    });
+
+    document.getElementById("pageInfo").innerText = history.length ? `Page ${page+1} of ${Math.ceil(history.length/perPage) || 1}` : "Page 1";
+  }
+
+  function prevPage(){
+    if(page > 0){
+      page--;
+      renderHistory();
+    }
+  }
+  function nextPage(){
+    if((page+1)*perPage < history.length){
+      page++;
+      renderHistory();
+    }
+  }
+
+  // ===== Details panel =====
+  function renderDetails(r){
+    const d = new Date(r.time);
+    const date = d.toLocaleDateString("en-AU",{day:'2-digit',month:'2-digit',year:'2-digit'});
+    const time = d.toLocaleTimeString("en-AU",{hour:'2-digit',minute:'2-digit'});
+
+    const baseKW = Number(r.kw || 0);
+    const evKW = Number(r.ev || 0);
+    const adjKW = adjustedKW(r);
+
+    const rate = Number(r.rate || 0);
+    const costHr = adjustedCostPerHour(r);
+
+    const daily = costHr * 24;
+    const monthly = daily * 30;
+
+    document.getElementById("details").innerHTML = `
+      <b>Full Details (${evMode ? "-EV" : "All"})</b><br><br>
+      Date: ${date} &nbsp; Time: ${time}<br>
+      Tariff: ${r.tariff || "-"}<br><br>
+
+      Amps: ${r.amps}<br>
+      Total kW: ${baseKW.toFixed(4)}<br>
+      EV usage (kW): ${evKW.toFixed(4)}<br>
+      Adjusted kW: ${adjKW.toFixed(4)}<br><br>
+
+      Rate ($/kWh): $${rate}<br>
+      Cost/hr: $${costHr.toFixed(4)}<br><br>
+
+      Daily house estimate: $${daily.toFixed(2)}<br>
+      Monthly house estimate: $${monthly.toFixed(0)}
+    `;
+  }
+
+  function renderTotalsDetails(monthFilter){
+    let rows = history;
+
+    if(monthFilter !== null && monthFilter !== undefined){
+      rows = history.filter(r => new Date(r.time).getMonth() === monthFilter);
+    }
+
+    if(!rows.length){
+      document.getElementById("details").innerHTML = "No totals data yet";
+      return;
+    }
+
+    let off = 0, peak = 0, shoulder = 0, fixed = 0;
+    let countOff = 0, countPeak = 0, countShoulder = 0, countFixed = 0;
+
+    rows.forEach(r=>{
+      let cost = adjustedCostPerHour(r);
+
+      if(settings.tariffType === "fixed"){
+        fixed += cost;
+        countFixed++;
+      } else {
+        if(r.tariff === "OffPeak"){
+          off += cost;
+          countOff++;
+        } else if(r.tariff === "Peak"){
+          peak += cost;
+          countPeak++;
+        } else {
+          shoulder += cost;
+          countShoulder++;
+        }
+      }
+    });
+
+    let avgOff = countOff ? off/countOff : 0;
+    let avgPeak = countPeak ? peak/countPeak : 0;
+    let avgShoulder = countShoulder ? shoulder/countShoulder : 0;
+    let avgFixed = countFixed ? fixed/countFixed : 0;
+
+    let totalAvg = (off+peak+shoulder+fixed)/rows.length;
+    let daily = totalAvg*24;
+    let monthly = daily*30;
+
+    let tariffHTML = "";
+    if(settings.tariffType === "fixed"){
+      tariffHTML = `Fixed Avg $/hr: $${avgFixed.toFixed(4)}<br>`;
+    } else {
+      tariffHTML = `
+        Off Peak Avg $/hr: $${avgOff.toFixed(4)}<br>
+        Shoulder Avg $/hr: $${avgShoulder.toFixed(4)}<br>
+        Peak Avg $/hr: $${avgPeak.toFixed(4)}<br>
+      `;
+    }
+
+    document.getElementById("details").innerHTML = `
+      <b>Total Averages (${evMode ? "-EV" : "All"})</b><br><br>
+
+      Readings used: ${rows.length}<br><br>
+
+      ${tariffHTML}
+
+      <br>
+
+      Average Cost/hr: $${totalAvg.toFixed(4)}<br>
+
+      Daily Estimate: $${daily.toFixed(2)}<br>
+      Monthly Estimate: $${monthly.toFixed(0)}
+    `;
+  }
+
+  // ===== Averages tab =====
+  function getMonthName(m){
+    const mobile = window.innerWidth < 600;
+    const short = ["J","F","M","A","M","J","J","A","S","O","N","D"];
+    const long = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return mobile ? short[m] : long[m];
+  }
+
+  function renderAvg(){
+    const months = {};
+    history.forEach(r=>{
+      const m = new Date(r.time).getMonth();
+      if(!months[m]) months[m] = {total:0, count:0};
+      months[m].total += adjustedCostPerHour(r);
+      months[m].count++;
+    });
+
+    const body = document.getElementById("avgBody");
+    body.innerHTML = "";
+
+    Object.keys(months).sort((a,b)=>a-b).forEach(mStr=>{
+      const m = parseInt(mStr,10);
+      const avgCostHr = months[m].total / months[m].count;
+      const daily = avgCostHr * 24;
+      const monthly = daily * 30;
+
+      const tr = document.createElement("tr");
+      tr.onclick = ()=>{
+        renderTotalsDetails(m);
+      };
+
+      tr.innerHTML = `
+        <td>${getMonthName(m)}</td>
+        <td>$${avgCostHr.toFixed(2)}</td>
+        <td>$${daily.toFixed(0)}</td>
+        <td>$${monthly.toFixed(0)}</td>
+      `;
+      body.appendChild(tr);
+    });
+  }
+
+  // ===== Chart =====
+  function drawChart(){
+    const canvas = document.getElementById("chart");
+    if(!canvas) return;
+    const ctx = canvas.getContext("2d");
+
+    const cssWidth = canvas.getBoundingClientRect().width || 320;
+    const cssHeight = 220;
+    const dpr = window.devicePixelRatio || 1;
+
+    canvas.style.height = cssHeight + "px";
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+
+    ctx.clearRect(0,0,cssWidth,cssHeight);
+
+    const monthlyEstimate = Array(12).fill(0);
+    for(let i=0;i<12;i++){
+      const rows = history.filter(r => new Date(r.time).getMonth() === i);
+      if(rows.length){
+        const avgCostHr = rows.reduce((a,r)=>a+adjustedCostPerHour(r),0) / rows.length;
+        monthlyEstimate[i] = avgCostHr * 24 * 30;
+      }
+    }
+
+    const maxY = Math.max(2000, ...monthlyEstimate) || 2000;
+    const topPad = 12;
+    const bottomPad = 32;
+    const leftPad = 34;
+    const rightPad = 10;
+
+    const chartW = cssWidth - leftPad - rightPad;
+    const chartH = cssHeight - topPad - bottomPad;
+
+    ctx.fillStyle = "#aaa";
+    ctx.font = "12px Arial";
+    ctx.fillText("$" + Math.round(maxY), 4, topPad+10);
+    ctx.fillText("$" + Math.round(maxY/2), 4, topPad + chartH/2 + 4);
+    ctx.fillText("$0", 10, topPad + chartH + 4);
+
+    const barW = chartW / 12;
+    monthlyEstimate.forEach((v, i)=>{
+      const clamped = Math.max(0, Math.min(maxY, v));
+      const h = maxY > 0 ? (clamped / maxY) * chartH : 0;
+
+      const x = leftPad + i*barW + 6;
+      const y = topPad + (chartH - h);
+      const w = Math.max(6, barW - 12);
+
+      ctx.fillStyle = "#4cafef";
+      ctx.fillRect(x, y, w, h);
+
+      ctx.fillStyle = "#fff";
+      const label = getMonthName(i);
+      const labelX = leftPad + i*barW + (barW/2) - (label.length*3);
+      ctx.fillText(label, labelX, topPad + chartH + 22);
+    });
+  }
+
+  // ===== Tabs =====
+  function showTab(tab){
+    document.getElementById("historyTab").style.display = (tab === "history") ? "block" : "none";
+    document.getElementById("avgTab").style.display = (tab === "avg") ? "block" : "none";
+
+    document.getElementById("tabHistoryBtn").classList.toggle("active", tab === "history");
+    document.getElementById("tabAvgBtn").classList.toggle("active", tab === "avg");
+
+    if(tab === "avg"){
+      renderTotalsDetails();
+      drawChart();
+    } else {
+      if(history.length){
+        const idx = Math.min(selectedIndex, history.length - 1);
+        renderDetails(history[idx]);
+      } else {
+        document.getElementById("details").innerHTML = "No data yet";
+      }
+    }
+  }
+
+  // ===== Settings =====
+  function openSettings(){
+    document.getElementById("tariffType").value = settings.tariffType;
+    document.getElementById("voltage").value = settings.voltage;
+
+    document.getElementById("offStart").value = settings.offStart;
+    document.getElementById("offEnd").value = settings.offEnd;
+    document.getElementById("offRate").value = settings.offRate;
+
+    document.getElementById("peakStart").value = settings.peakStart;
+    document.getElementById("peakEnd").value = settings.peakEnd;
+    document.getElementById("peakRate").value = settings.peakRate;
+
+    document.getElementById("shoulderRate").value = settings.shoulderRate;
+    document.getElementById("fixedRate").value = settings.fixedRate;
+
+    toggleTariffSettingsUI();
+
+    document.getElementById("mainView").style.display = "none";
+    document.getElementById("settingsView").style.display = "block";
+  }
+
+  function closeSettings(){
+    document.getElementById("settingsView").style.display = "none";
+    document.getElementById("mainView").style.display = "block";
+
+    drawChart();
+  }
+
+  function toggleTariffSettingsUI(){
+    const isFixed = document.getElementById("tariffType").value === "fixed";
+    document.getElementById("touSettings").style.display = isFixed ? "none" : "block";
+    document.getElementById("fixedSettings").style.display = isFixed ? "block" : "none";
+  }
+
+  document.getElementById("tariffType").addEventListener("change", toggleTariffSettingsUI);
+
+  function saveSettings(){
+    settings.tariffType = document.getElementById("tariffType").value;
+    settings.voltage = parseFloat(document.getElementById("voltage").value) || 230;
+
+    settings.offStart = document.getElementById("offStart").value || "11:00";
+    settings.offEnd = document.getElementById("offEnd").value || "16:00";
+    settings.offRate = parseFloat(document.getElementById("offRate").value) || settings.offRate;
+
+    settings.peakStart = document.getElementById("peakStart").value || "16:00";
+    settings.peakEnd = document.getElementById("peakEnd").value || "21:00";
+    settings.peakRate = parseFloat(document.getElementById("peakRate").value) || settings.peakRate;
+
+    settings.shoulderRate = parseFloat(document.getElementById("shoulderRate").value) || settings.shoulderRate;
+    settings.fixedRate = parseFloat(document.getElementById("fixedRate").value) || settings.fixedRate;
+
+    localStorage.setItem("settings", JSON.stringify(settings));
+
+    closeSettings();
+  }
+
+  // ===== Export modal =====
+  function openExportModal(){
+    document.getElementById("exportOverlay").style.display = "flex";
+  }
+  function closeExportModal(){
+    document.getElementById("exportOverlay").style.display = "none";
+  }
+  function overlayClick(e){
+    if(e.target && e.target.id === "exportOverlay"){
+      closeExportModal();
+    }
+  }
+  function confirmExport(){
+    const days = parseInt(document.getElementById("exportRange").value, 10);
+    closeExportModal();
+    exportCSV(days);
+  }
+
+  function exportCSV(days){
+    let filtered = history;
+
+    if(days > 0){
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      filtered = history.filter(r => new Date(r.time) >= cutoff);
+    }
+
+    if(!filtered.length){
+      alert("No data in that range.");
+      return;
+    }
+
+    let csv = "ISO Time,Date,Time,Amps,kW,EV_kW,Adjusted_kW,Rate($/kWh),CostPerHour($/hr),Tariff,DailyEstimate($),MonthlyEstimate($),Mode\n";
+
+    let totalAmps=0, totalKW=0, totalEV=0, totalAdjKW=0, totalRate=0, totalCost=0, totalDaily=0, totalMonthly=0;
+
+    filtered.forEach(r=>{
+      const d = new Date(r.time);
+      const date = d.toLocaleDateString("en-AU");
+      const time = d.toLocaleTimeString("en-AU",{hour:'2-digit',minute:'2-digit'});
+
+      const baseKW = Number(r.kw || 0);
+      const evKW = Number(r.ev || 0);
+      const adjKW = adjustedKW(r);
+
+      const rate = Number(r.rate || 0);
+      const costHr = adjustedCostPerHour(r);
+      const daily = costHr * 24;
+      const monthly = daily * 30;
+
+      totalAmps += Number(r.amps || 0);
+      totalKW += baseKW;
+      totalEV += evKW;
+      totalAdjKW += adjKW;
+      totalRate += rate;
+      totalCost += costHr;
+      totalDaily += daily;
+      totalMonthly += monthly;
+
+      csv += `${r.time},${date},${time},${r.amps},${baseKW},${evKW},${adjKW},${rate},${costHr},${r.tariff || "-"},${daily},${monthly},${evMode ? "-EV" : "All"}\n`;
+    });
+
+    const count = filtered.length;
+
+    csv += `\n**AVERAGES**, , ,${(totalAmps/count).toFixed(2)},${(totalKW/count).toFixed(6)},${(totalEV/count).toFixed(6)},${(totalAdjKW/count).toFixed(6)},${(totalRate/count).toFixed(6)},${(totalCost/count).toFixed(6)}, ,${(totalDaily/count).toFixed(2)},${(totalMonthly/count).toFixed(0)},${evMode ? "-EV" : "All"}\n`;
+
+    const blob = new Blob([csv], {type:"text/csv"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "energy.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // ===== Clear =====
+  function clearHistoryConfirm(){
+    const ok = confirm("Are you sure you want to clear all history?");
+    if(ok) clearHistory();
+  }
+
+  function clearHistory(){
+    history = [];
+    localStorage.removeItem("history");
+    page = 0;
+    selectedIndex = 0;
+
+    renderHistory();
+    renderAvg();
+    drawChart();
+    document.getElementById("details").innerHTML = "No data yet";
+  }
+
+  window.addEventListener("resize", ()=>{ drawChart(); });
+
+  // ===== Init =====
+  renderHistory();
+  renderAvg();
+  drawChart();
+
+  if(history.length){
+    renderDetails(history[0]);
+  } else {
+    document.getElementById("details").innerHTML = "No data yet";
+  }
+</script>
+
+</body>
+</html>
