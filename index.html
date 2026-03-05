@@ -422,6 +422,51 @@
     return settings.shoulderRate;
   }
 
+  // ===== Tariff duration + blended daily/monthly helpers =====
+  function getTariffDurations(){
+    // Returns approximate hours per day for each tariff bucket based on settings
+    if(settings.tariffType === "fixed"){
+      return {offHours:0, peakHours:0, shoulderHours:24};
+    }
+
+    const offStart = parseTime(settings.offStart);
+    const offEnd = parseTime(settings.offEnd);
+    const peakStart = parseTime(settings.peakStart);
+    const peakEnd = parseTime(settings.peakEnd);
+
+    let offHours = Math.max(0, (offEnd - offStart) / 60);
+    let peakHours = Math.max(0, (peakEnd - peakStart) / 60);
+    let shoulderHours = 24 - offHours - peakHours;
+    if(shoulderHours < 0) shoulderHours = 0;
+
+    return {offHours, peakHours, shoulderHours};
+  }
+
+  function computeDailyMonthlyFromKW(adjKW){
+    // Given an adjusted kW, compute a blended daily and monthly estimate
+    // using all tariff windows over a 24h day.
+    let daily = 0;
+
+    if(settings.tariffType === "fixed"){
+      const rate = Number(settings.fixedRate || 0);
+      daily = adjKW * rate * 24;
+    } else {
+      const {offHours, peakHours, shoulderHours} = getTariffDurations();
+      const offRate = Number(settings.offRate || 0);
+      const peakRate = Number(settings.peakRate || 0);
+      const shoulderRate = Number(settings.shoulderRate || 0);
+
+      daily = adjKW * (
+        offRate * offHours +
+        peakRate * peakHours +
+        shoulderRate * shoulderHours
+      );
+    }
+
+    const monthly = daily * 30;
+    return {daily, monthly};
+  }
+
   // ===== EV adjusters =====
   function adjustedKW(r){
     const base = Number(r.kw || 0);
@@ -457,10 +502,13 @@
 
   // ===== Calculate =====
   function calculate(){
-    const amps = parseFloat(document.getElementById("amps").value);
+    const ampsInput = document.getElementById("amps");
+    const evInput = document.getElementById("evkw");
+
+    const amps = parseFloat(ampsInput.value);
     if(!(amps || amps === 0)) return;
 
-    const ev = parseFloat(document.getElementById("evkw").value) || 0;
+    const ev = parseFloat(evInput.value) || 0;
 
     const kw = (amps * Number(settings.voltage || 230)) / 1000;
 
@@ -482,6 +530,10 @@
 
     page = 0;
     selectedIndex = 0;
+
+    // Clear inputs after successful calculation
+    ampsInput.value = "";
+    evInput.value = "";
 
     renderHistory();
     renderAvg();
@@ -552,8 +604,24 @@
     const rate = Number(r.rate || 0);
     const costHr = adjustedCostPerHour(r);
 
-    const daily = costHr * 24;
-    const monthly = daily * 30;
+    // Blended daily/monthly using all tariff windows across a day
+    const {daily, monthly} = computeDailyMonthlyFromKW(adjKW);
+
+    // Period estimate for the current tariff window (e.g. OffPeak / Peak / Shoulder)
+    let periodHours = 24;
+    if(settings.tariffType === "fixed"){
+      periodHours = 24;
+    } else {
+      const {offHours, peakHours, shoulderHours} = getTariffDurations();
+      if(r.tariff === "OffPeak"){
+        periodHours = offHours;
+      } else if(r.tariff === "Peak"){
+        periodHours = peakHours;
+      } else {
+        periodHours = shoulderHours;
+      }
+    }
+    const periodEstimate = costHr * periodHours;
 
     document.getElementById("details").innerHTML = `
       <b>Full Details (${evMode ? "-EV" : "All"})</b><br><br>
@@ -567,6 +635,8 @@
 
       Rate ($/kWh): $${rate}<br>
       Cost/hr: $${costHr.toFixed(4)}<br><br>
+
+      Tariff period estimate: $${periodEstimate.toFixed(2)}<br><br>
 
       Daily house estimate: $${daily.toFixed(2)}<br>
       Monthly house estimate: $${monthly.toFixed(0)}
@@ -587,9 +657,12 @@
 
     let off = 0, peak = 0, shoulder = 0, fixed = 0;
     let countOff = 0, countPeak = 0, countShoulder = 0, countFixed = 0;
+    let totalAdjKWAll = 0;
 
     rows.forEach(r=>{
       let cost = adjustedCostPerHour(r);
+      const adj = adjustedKW(r);
+      totalAdjKWAll += adj;
 
       if(settings.tariffType === "fixed"){
         fixed += cost;
@@ -613,9 +686,12 @@
     let avgShoulder = countShoulder ? shoulder/countShoulder : 0;
     let avgFixed = countFixed ? fixed/countFixed : 0;
 
-    let totalAvg = (off+peak+shoulder+fixed)/rows.length;
-    let daily = totalAvg*24;
-    let monthly = daily*30;
+    // Use average adjusted kW across all readings and blend over the day
+    const avgAdjKWAll = totalAdjKWAll / rows.length;
+    const blended = computeDailyMonthlyFromKW(avgAdjKWAll);
+    const daily = blended.daily;
+    const monthly = blended.monthly;
+    const totalAvg = daily / 24;
 
     let tariffHTML = "";
     if(settings.tariffType === "fixed"){
@@ -656,8 +732,8 @@
     const months = {};
     history.forEach(r=>{
       const m = new Date(r.time).getMonth();
-      if(!months[m]) months[m] = {total:0, count:0};
-      months[m].total += adjustedCostPerHour(r);
+      if(!months[m]) months[m] = {totalKW:0, count:0};
+      months[m].totalKW += adjustedKW(r);
       months[m].count++;
     });
 
@@ -666,9 +742,11 @@
 
     Object.keys(months).sort((a,b)=>a-b).forEach(mStr=>{
       const m = parseInt(mStr,10);
-      const avgCostHr = months[m].total / months[m].count;
-      const daily = avgCostHr * 24;
-      const monthly = daily * 30;
+      const avgKW = months[m].totalKW / months[m].count;
+      const blended = computeDailyMonthlyFromKW(avgKW);
+      const daily = blended.daily;
+      const monthly = blended.monthly;
+      const avgCostHr = daily / 24;
 
       const tr = document.createElement("tr");
       tr.onclick = ()=>{
@@ -706,8 +784,13 @@
     for(let i=0;i<12;i++){
       const rows = history.filter(r => new Date(r.time).getMonth() === i);
       if(rows.length){
-        const avgCostHr = rows.reduce((a,r)=>a+adjustedCostPerHour(r),0) / rows.length;
-        monthlyEstimate[i] = avgCostHr * 24 * 30;
+        let totalKW = 0;
+        rows.forEach(r => {
+          totalKW += adjustedKW(r);
+        });
+        const avgKW = totalKW / rows.length;
+        const blended = computeDailyMonthlyFromKW(avgKW);
+        monthlyEstimate[i] = blended.monthly;
       }
     }
 
@@ -870,8 +953,9 @@
 
       const rate = Number(r.rate || 0);
       const costHr = adjustedCostPerHour(r);
-      const daily = costHr * 24;
-      const monthly = daily * 30;
+      const blended = computeDailyMonthlyFromKW(adjKW);
+      const daily = blended.daily;
+      const monthly = blended.monthly;
 
       totalAmps += Number(r.amps || 0);
       totalKW += baseKW;
