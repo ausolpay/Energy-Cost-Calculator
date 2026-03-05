@@ -563,17 +563,12 @@
 
     if(settings.tariffType === "fixed"){
       const rate = Number(settings.fixedRate || 0);
-      const evFrom = r.evFrom || "";
-      const evTo = r.evTo || "";
-      const diff = diffHours(evFrom, evTo);
-      const chargeHours = diff !== null ? diff : 24;
-
       if(evMode){
         // -EV mode: only house usage
         daily = houseKW * rate * 24;
       } else {
-        // All mode: house all day + EV only during charge window
-        daily = (houseKW * rate * 24) + (evKW * rate * chargeHours);
+        // All mode: house all day + EV cost for its charge window
+        daily = (houseKW * rate * 24) + computeEvCostForReading(r);
       }
     } else {
       const {offHours, peakHours, shoulderHours} = getTariffDurations();
@@ -588,34 +583,113 @@
         shoulderRate * shoulderHours
       );
 
-      // EV only in its tariff window, for its charge hours (or full window if times missing)
+      // EV cost across any overlapping tariff windows for its charge period
       if(!evMode && evKW > 0){
-        const evFrom = r.evFrom || "";
-        const evTo = r.evTo || "";
-        const diff = diffHours(evFrom, evTo);
-
-        let windowHours = 0;
-        let windowRate = 0;
-        if(r.tariff === "OffPeak"){
-          windowHours = offHours;
-          windowRate = offRate;
-        } else if(r.tariff === "Peak"){
-          windowHours = peakHours;
-          windowRate = peakRate;
-        } else {
-          windowHours = shoulderHours;
-          windowRate = shoulderRate;
-        }
-
-        const chargeHours = diff !== null ? Math.min(windowHours || 0, diff) : windowHours;
-        if(chargeHours > 0){
-          daily += evKW * windowRate * chargeHours;
-        }
+        daily += computeEvCostForReading(r);
       }
     }
 
     const monthly = daily * 30;
     return {daily, monthly};
+  }
+
+  function computeEvCostForReading(r){
+    const evKW = Number(r.ev || 0);
+    if(evKW <= 0) return 0;
+
+    if(settings.tariffType === "fixed"){
+      const rate = Number(settings.fixedRate || 0);
+      const evFrom = r.evFrom || "";
+      const evTo = r.evTo || "";
+      const diff = diffHours(evFrom, evTo);
+      const chargeHours = diff !== null ? diff : 24;
+      return evKW * rate * chargeHours;
+    } else {
+      const offRate = Number(settings.offRate || 0);
+      const peakRate = Number(settings.peakRate || 0);
+      const shoulderRate = Number(settings.shoulderRate || 0);
+
+      const evFrom = r.evFrom || "";
+      const evTo = r.evTo || "";
+      const s = parseTimeToMinutes(evFrom);
+      const e = parseTimeToMinutes(evTo);
+
+      // If no specific times, fall back to the current reading's tariff window only
+      if(s === null || e === null){
+        const {offHours, peakHours, shoulderHours} = getTariffDurations();
+        let windowHours = 0;
+        if(r.tariff === "OffPeak"){
+          windowHours = offHours;
+        } else if(r.tariff === "Peak"){
+          windowHours = peakHours;
+        } else {
+          windowHours = shoulderHours;
+        }
+        if(windowHours <= 0) return 0;
+        const rate = (r.tariff === "OffPeak") ? offRate :
+                     (r.tariff === "Peak") ? peakRate :
+                     shoulderRate;
+        return evKW * rate * windowHours;
+      }
+
+      // Build up to two EV segments (to handle wrap past midnight)
+      const segments = [];
+      if(e > s){
+        segments.push([s, e]);
+      } else if(e < s){
+        segments.push([s, 24*60]);
+        segments.push([0, e]);
+      } else {
+        // zero-length; treat as no charging
+        return 0;
+      }
+
+      // Tariff windows (assumed non-wrapping)
+      const offStart = parseTime(settings.offStart);
+      const offEnd = parseTime(settings.offEnd);
+      const peakStart = parseTime(settings.peakStart);
+      const peakEnd = parseTime(settings.peakEnd);
+
+      function overlapMinutes(aStart,aEnd,bStart,bEnd){
+        const start = Math.max(aStart, bStart);
+        const end = Math.min(aEnd, bEnd);
+        return Math.max(0, end - start);
+      }
+
+      let offMinutes = 0;
+      let peakMinutes = 0;
+      let shoulderMinutes = 0;
+
+      segments.forEach(seg=>{
+        const segStart = seg[0];
+        const segEnd = seg[1];
+        const segLen = Math.max(0, segEnd - segStart);
+        if(segLen <= 0) return;
+
+        const o = overlapMinutes(segStart, segEnd, offStart, offEnd);
+        const p = overlapMinutes(segStart, segEnd, peakStart, peakEnd);
+        let sMinutes = segLen - o - p;
+        if(sMinutes < 0) sMinutes = 0;
+
+        offMinutes += o;
+        peakMinutes += p;
+        shoulderMinutes += sMinutes;
+      });
+
+      const offHours = offMinutes / 60;
+      const peakHours = peakMinutes / 60;
+      const shoulderHours = shoulderMinutes / 60;
+
+      if(offHours <= 0 && peakHours <= 0 && shoulderHours <= 0) return 0;
+
+      const cost =
+        evKW * (
+          offRate * offHours +
+          peakRate * peakHours +
+          shoulderRate * shoulderHours
+        );
+      return cost;
+    }
   }
 
   // ===== EV adjusters =====
@@ -780,6 +854,9 @@
     // with EV only during its charge window in the current tariff.
     const {daily, monthly} = computeDailyMonthlyForReading(r);
 
+    // EV-only cost estimate for its charging window and tariff
+    const evCost = computeEvCostForReading(r);
+
     // Period estimate for the current tariff window (e.g. OffPeak / Peak / Shoulder)
     let periodHours = 24;
     if(settings.tariffType === "fixed"){
@@ -811,6 +888,7 @@
       Cost/hr: $${costHr.toFixed(4)}<br><br>
 
       EV charge window: ${r.evFrom && r.evTo ? `${r.evFrom}–${r.evTo}` : "n/a"}<br>
+      EV charge cost (est): $${evCost.toFixed(2)}<br>
       Tariff period estimate: $${periodEstimate.toFixed(2)}<br><br>
 
       Daily house estimate: $${daily.toFixed(2)}<br>
