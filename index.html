@@ -236,6 +236,25 @@
     background:#3a3a3a;
   }
   .primary:hover{ background:#4a4a4a; }
+
+  .editBtn{
+    float:right;
+    background:#2a2a2a;
+    border:none;
+    color:#fff;
+    padding:4px 8px;
+    border-radius:6px;
+    font-size:12px;
+    cursor:pointer;
+  }
+  .editBtn:hover{
+    background:#3a3a3a;
+  }
+
+  .evTimes input[type="time"]:disabled{
+    background:#262626;
+    color:#777;
+  }
 </style>
 </head>
 
@@ -257,15 +276,15 @@
   <input id="amps" type="number" placeholder="Enter Amps" step="any" min="0">
   <div class="spacer"></div>
 
+  <input id="evkw" type="number" placeholder="Optional EV usage (kW) e.g. 7.1" step="any" min="0">
   <div class="evRow">
-    <div class="evCol">
-      <input id="evkw" type="number" placeholder="Optional EV usage (kW) e.g. 7.1" step="any" min="0">
-    </div>
     <div class="evTimes">
       <div class="evTimeRow">
         <span class="evTimeLabel">from</span>
         <input id="evFrom" type="time">
       </div>
+    </div>
+    <div class="evTimes">
       <div class="evTimeRow">
         <span class="evTimeLabel">to</span>
         <input id="evTo" type="time">
@@ -410,6 +429,34 @@
   </div>
 </div>
 
+<!-- Edit Reading Modal -->
+<div class="modalOverlay" id="editOverlay" onclick="editOverlayClick(event)">
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3>Edit Reading</h3>
+    <span class="label" style="margin-top:0;">Amps</span>
+    <input id="editAmps" type="number" step="any" min="0">
+
+    <span class="label">EV usage (kW)</span>
+    <input id="editEv" type="number" step="any" min="0">
+
+    <div class="row2">
+      <div>
+        <span class="label" style="margin-top:10px;">From</span>
+        <input id="editEvFrom" type="time">
+      </div>
+      <div>
+        <span class="label" style="margin-top:10px;">To</span>
+        <input id="editEvTo" type="time">
+      </div>
+    </div>
+
+    <div class="modalActions">
+      <button type="button" onclick="closeEditModal()">Cancel</button>
+      <button type="button" class="primary" onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
   // ===== Storage =====
   let history = JSON.parse(localStorage.getItem("history") || "[]");
@@ -436,6 +483,7 @@
   let evMode = false;
 
   let selectedIndex = 0;
+  let selectedMonthIndex = null;
 
   // ===== Helpers for TOU =====
   function parseTime(t){
@@ -578,6 +626,21 @@
 
   function adjustedCostPerHour(r){
     return adjustedKW(r) * Number(r.rate || 0);
+  }
+
+  function updateEvTimeInputs(){
+    const evInput = document.getElementById("evkw");
+    const evFrom = document.getElementById("evFrom");
+    const evTo = document.getElementById("evTo");
+    if(!evInput || !evFrom || !evTo) return;
+    const v = evInput.value.trim();
+    const hasValue = v !== "" && !Number.isNaN(parseFloat(v));
+    evFrom.disabled = !hasValue;
+    evTo.disabled = !hasValue;
+    if(!hasValue){
+      evFrom.value = "";
+      evTo.value = "";
+    }
   }
 
   // ===== UI: Mode Toggle =====
@@ -732,6 +795,7 @@
     const periodEstimate = costHr * periodHours;
 
     document.getElementById("details").innerHTML = `
+      <button type="button" class="editBtn" onclick="openEditModal()">Edit</button>
       <b>Full Details (${evMode ? "-EV" : "All"})</b><br><br>
       Date: ${date} &nbsp; Time: ${time}<br>
       Tariff: ${r.tariff || "-"}<br><br>
@@ -859,6 +923,8 @@
       const tr = document.createElement("tr");
       tr.onclick = ()=>{
         renderTotalsDetails(m);
+        selectedMonthIndex = m;
+        drawChart();
       };
 
       tr.innerHTML = `
@@ -933,6 +999,39 @@
       const labelX = leftPad + i*barW + (barW/2) - (label.length*3);
       ctx.fillText(label, labelX, topPad + chartH + 22);
     });
+
+    // Highlight selected month with value label above bar
+    if(selectedMonthIndex !== null &&
+       selectedMonthIndex >= 0 &&
+       selectedMonthIndex < 12 &&
+       monthlyEstimate[selectedMonthIndex] > 0){
+      const val = monthlyEstimate[selectedMonthIndex];
+      const text = "$" + Math.round(val);
+
+      const clamped = Math.max(0, Math.min(maxY, val));
+      const h = maxY > 0 ? (clamped / maxY) * chartH : 0;
+
+      const x = leftPad + selectedMonthIndex*barW + 6;
+      const y = topPad + (chartH - h);
+      const w = Math.max(6, barW - 12);
+
+      const centerX = x + w/2;
+      const boxPaddingX = 6;
+      const boxPaddingY = 4;
+      const textWidth = ctx.measureText(text).width;
+      const boxW = textWidth + boxPaddingX*2;
+      const boxH = 18;
+      let boxX = centerX - boxW/2;
+      if(boxX < leftPad) boxX = leftPad;
+      if(boxX + boxW > leftPad + chartW) boxX = leftPad + chartW - boxW;
+      const boxY = Math.max(topPad, y - boxH - 4);
+
+      ctx.fillStyle = "#3a3a3a";
+      ctx.fillRect(boxX, boxY, boxW, boxH);
+
+      ctx.fillStyle = "#fff";
+      ctx.fillText(text, boxX + boxPaddingX, boxY + boxH - boxPaddingY - 1);
+    }
   }
 
   // ===== Tabs =====
@@ -954,6 +1053,35 @@
         document.getElementById("details").innerHTML = "No data yet";
       }
     }
+  }
+
+  function onChartClick(evt){
+    const canvas = evt.currentTarget;
+    const rect = canvas.getBoundingClientRect();
+    const x = evt.clientX - rect.left;
+    const cssWidth = rect.width || 320;
+
+    const topPad = 12;
+    const bottomPad = 32;
+    const leftPad = 34;
+    const rightPad = 10;
+    const chartW = cssWidth - leftPad - rightPad;
+
+    if(x < leftPad || x > leftPad + chartW){
+      return;
+    }
+    const rel = x - leftPad;
+    const barW = chartW / 12;
+    let idx = Math.floor(rel / barW);
+    if(idx < 0 || idx > 11) return;
+
+    // Toggle selection if same bar clicked again
+    selectedMonthIndex = (selectedMonthIndex === idx) ? null : idx;
+
+    if(selectedMonthIndex !== null){
+      renderTotalsDetails(selectedMonthIndex);
+    }
+    drawChart();
   }
 
   // ===== Settings =====
@@ -1019,6 +1147,62 @@
   }
   function closeExportModal(){
     document.getElementById("exportOverlay").style.display = "none";
+  }
+
+  // ===== Edit Reading modal =====
+  function openEditModal(){
+    if(!history.length) return;
+    const idx = Math.min(Math.max(selectedIndex, 0), history.length - 1);
+    const r = history[idx];
+    document.getElementById("editAmps").value = r.amps ?? "";
+    document.getElementById("editEv").value = r.ev ?? "";
+    document.getElementById("editEvFrom").value = r.evFrom || "";
+    document.getElementById("editEvTo").value = r.evTo || "";
+    document.getElementById("editOverlay").style.display = "flex";
+  }
+
+  function closeEditModal(){
+    document.getElementById("editOverlay").style.display = "none";
+  }
+
+  function editOverlayClick(e){
+    if(e.target && e.target.id === "editOverlay"){
+      closeEditModal();
+    }
+  }
+
+  function saveEdit(){
+    if(!history.length){
+      closeEditModal();
+      return;
+    }
+    const idx = Math.min(Math.max(selectedIndex, 0), history.length - 1);
+    const r = history[idx];
+
+    const ampsVal = parseFloat(document.getElementById("editAmps").value);
+    if(Number.isNaN(ampsVal)){
+      alert("Please enter a valid Amps value.");
+      return;
+    }
+    const evVal = parseFloat(document.getElementById("editEv").value) || 0;
+    const fromVal = document.getElementById("editEvFrom").value || "";
+    const toVal = document.getElementById("editEvTo").value || "";
+
+    r.amps = ampsVal;
+    r.kw = (ampsVal * Number(settings.voltage || 230)) / 1000;
+    r.ev = evVal;
+    r.evFrom = fromVal;
+    r.evTo = toVal;
+
+    history[idx] = r;
+    localStorage.setItem("history", JSON.stringify(history));
+
+    closeEditModal();
+
+    renderHistory();
+    renderAvg();
+    drawChart();
+    renderDetails(history[idx]);
   }
   function overlayClick(e){
     if(e.target && e.target.id === "exportOverlay"){
@@ -1112,6 +1296,15 @@
   renderHistory();
   renderAvg();
   drawChart();
+
+  // Tie EV time enable/disable to EV kW input
+  document.getElementById("evkw").addEventListener("input", updateEvTimeInputs);
+  updateEvTimeInputs();
+
+  const chartEl = document.getElementById("chart");
+  if(chartEl){
+    chartEl.addEventListener("click", onChartClick);
+  }
 
   if(history.length){
     renderDetails(history[0]);
