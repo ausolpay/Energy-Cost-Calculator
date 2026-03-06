@@ -279,17 +279,18 @@
     display:flex;
     align-items:center;
     justify-content:center;
-    gap:12px;
+    gap:6px;
     margin-bottom:10px;
   }
   .usageNavBtn{
     background:#2a2a2a;
     border:none;
     color:#fff;
-    padding:6px 12px;
+    padding:4px 8px;
     border-radius:8px;
     cursor:pointer;
-    font-size:16px;
+    font-size:14px;
+    min-width:32px;
   }
   .usageNavBtn:hover{ background:#3a3a3a; }
   .usageDateRange{
@@ -627,6 +628,13 @@
   let usageGraphMode = "kw";
   let selectedUsageDayIndex = null;
   let usageDayDataCache = [];
+
+  function getLocalDateKey(d){
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2,"0");
+    const day = String(d.getDate()).padStart(2,"0");
+    return `${y}-${m}-${day}`;
+  }
 
   // ===== Helpers for TOU =====
   function parseTime(t){
@@ -1487,8 +1495,8 @@
   }
 
   function computeUsageDayData(date){
-    const dateStr = date.toISOString().slice(0,10);
-    const dayReadings = history.filter(r => new Date(r.time).toISOString().slice(0,10) === dateStr);
+    const dateStr = getLocalDateKey(date);
+    const dayReadings = history.filter(r => getLocalDateKey(new Date(r.time)) === dateStr);
     const off = { kw: [], cost: [] };
     const peak = { kw: [], cost: [] };
     const shoulder = { kw: [], cost: [] };
@@ -1534,10 +1542,10 @@
 
   function renderUsage(){
     const days = getUsageDays();
-    const todayStr = new Date().toISOString().slice(0,10);
+    const todayStr = getLocalDateKey(new Date());
     usageDayDataCache = days.map(d => computeUsageDayData(d));
     const start = days[0], end = days[6];
-    const rangeStr = start.toLocaleDateString("en-AU",{day:"numeric",month:"short"}) + " – " + end.toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"});
+    const rangeStr = start.toLocaleDateString("en-AU",{day:"numeric",month:"short"}) + " – " + end.toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"2-digit"});
     document.getElementById("usageDateRange").textContent = rangeStr;
 
     const body = document.getElementById("usageBody");
@@ -1616,7 +1624,7 @@
     const chartH = cssHeight - topPad - bottomPad;
     const barW = chartW / 7;
     const segmentW = Math.max(2, barW / 3 - 2);
-    const todayStr = new Date().toISOString().slice(0,10);
+    const todayStr = getLocalDateKey(new Date());
     const mobile = window.innerWidth < 600;
 
     const colors = { off: "#4caf50", peak: "#f44336", shoulder: "#ff9800" };
@@ -1661,6 +1669,46 @@
       ctx.fillStyle = "#fff";
       ctx.fillText(label, x0 + (segmentW * 3) / 2 - label.length * 3, topPad + chartH + 20);
     });
+
+    // Legend-style boxes for current/selected day
+    let focusIndex = selectedUsageDayIndex;
+    if(focusIndex === null || focusIndex < 0 || focusIndex >= data.length){
+      focusIndex = data.findIndex(d => d.dateStr === todayStr);
+    }
+    if(focusIndex != null && focusIndex >= 0 && focusIndex < data.length){
+      const d = data[focusIndex];
+      ctx.font = "11px Arial";
+      const boxH = 18;
+      const boxPaddingX = 6;
+      const boxPaddingY = 4;
+
+      const entries = settings.tariffType === "fixed"
+        ? [
+            { label: "Fixed", value: isCost ? d.totalCost : d.totalKw, color: "#4cafef" }
+          ]
+        : [
+            { label: "Off", value: isCost ? d.offCost : d.offKw, color: colors.off },
+            { label: "Peak", value: isCost ? d.peakCost : d.peakKw, color: colors.peak },
+            { label: "Should", value: isCost ? d.shoulderCost : d.shoulderKw, color: colors.shoulder }
+          ];
+
+      entries.forEach((e, idx) => {
+        const valText = (isCost ? "$" : "") + e.value.toFixed(2);
+        const text = `${e.label}: ${valText}`;
+        const textW = ctx.measureText(text).width;
+        const boxW = textW + boxPaddingX * 2;
+        const x = leftPad + chartW - boxW - 4;
+        const y = topPad + 4 + idx * (boxH + 4);
+
+        ctx.fillStyle = e.color;
+        ctx.globalAlpha = 0.9;
+        ctx.fillRect(x, y, boxW, boxH);
+        ctx.globalAlpha = 1;
+
+        ctx.fillStyle = "#000";
+        ctx.fillText(text, x + boxPaddingX, y + boxH - boxPaddingY - 1);
+      });
+    }
   }
 
   // ===== Tabs =====
