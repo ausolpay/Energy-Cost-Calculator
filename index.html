@@ -1216,11 +1216,7 @@
       ? avgKwFixed * 24 * 30
       : (avgKwOff * dur.offHours + avgKwPeak * dur.peakHours + avgKwShoulder * dur.shoulderHours) * 30;
 
-    const dates = rows.map(r => new Date(r.time).setHours(0,0,0,0));
-    const minD = new Date(Math.min(...dates));
-    const maxD = new Date(Math.max(...dates));
-    const daysSpan = Math.max(1, Math.ceil((maxD - minD) / (24*60*60*1000)) + 1);
-    const monthlyEvCostEst = evReadingsCount > 0 ? (totalEvCostDollars / daysSpan) * 30 : 0;
+    const totalEvCost = totalEvCostDollars;
 
     let tariffHTML = "";
     if(settings.tariffType === "fixed"){
@@ -1253,7 +1249,7 @@
 
       <b>Total EV</b><br>
       Total EV usage (from ${evReadingsCount} readings with EV): ${totalEvKwh.toFixed(1)} kWh in period<br>
-      Total EV monthly cost (from readings & their periods): ${evMode ? "-" : "$" + monthlyEvCostEst.toFixed(2)}<br><br>
+      Total EV cost (readings at their tariff period rates): ${evMode ? "-" : "$" + totalEvCost.toFixed(2)}<br><br>
 
       <b>Comparison (vs comparison tariff)</b><br>
       Daily would be: $${(sumCompareDaily/rows.length).toFixed(2)} &nbsp; Savings: $${(daily - sumCompareDaily/rows.length).toFixed(2)}<br>
