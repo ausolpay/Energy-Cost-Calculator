@@ -1067,30 +1067,21 @@
       else if(r.tariff === "Peak") periodHours = peakHours;
       else periodHours = shoulderHours;
     }
-    const periodEstimateRaw = costHr * periodHours;
+    // This period only: cost if usage continued at this rate for the full tariff window
+    const periodEstimate = costHr * periodHours;
 
-    // Usage insights: same tariff period readings up to and including this one
-    const samePeriod = getReadingsInSameTariffPeriod(r);
-    let periodEstimate = periodEstimateRaw;
-    let dailyInsight = daily;
-    let monthlyInsight = monthly;
-    if(samePeriod.length){
-      const avgCostHr = samePeriod.reduce((a,x)=>a+adjustedCostPerHour(x),0)/samePeriod.length;
-      const avgKW = samePeriod.reduce((a,x)=>a+adjustedKW(x),0)/samePeriod.length;
-      periodEstimate = avgCostHr * periodHours;
-      const blended = computeDailyMonthlyFromKW(avgKW);
-      dailyInsight = blended.daily;
-      monthlyInsight = blended.monthly;
-    }
-
-    // Comparison tariff costs and savings
+    // Comparison (respect -EV: no EV comparison when in -EV mode)
     const comparePeriodCost = adjKW * getCompareRate(new Date(r.time)) * periodHours;
-    const compareEvCost = computeEvCostAtCompareTariff(r);
+    const compareEvCost = evMode ? 0 : computeEvCostAtCompareTariff(r);
     const {daily: compareDaily, monthly: compareMonthly} = computeDailyMonthlyAtCompareTariffForReading(r);
-    const periodSavings = periodEstimateRaw - comparePeriodCost;
-    const evSavings = evCost - compareEvCost;
+    const periodSavings = periodEstimate - comparePeriodCost;
+    const evSavings = evMode ? 0 : (evCost - compareEvCost);
     const dailySavings = daily - compareDaily;
     const monthlySavings = monthly - compareMonthly;
+
+    const evCostShow = evMode ? "-" : evCost.toFixed(2);
+    const compareEvShow = evMode ? "-" : compareEvCost.toFixed(2);
+    const evSavingsShow = evMode ? "-" : evSavings.toFixed(2);
 
     document.getElementById("details").innerHTML = `
       <b>Full Details (${evMode ? "-EV" : "All"})</b><br><br>
@@ -1106,15 +1097,16 @@
       Cost/hr: $${costHr.toFixed(4)}<br><br>
 
       EV charge window: ${r.evFrom && r.evTo ? `${r.evFrom}–${r.evTo}` : "n/a"}<br>
-      EV charge cost (est): $${evCost.toFixed(2)}<br>
-      Tariff period estimate: $${periodEstimate.toFixed(2)} (usage insight)<br><br>
+      EV charge cost (est): ${evCostShow}<br>
+      Tariff period estimate (this ${r.tariff || "period"} only): $${periodEstimate.toFixed(2)}<br><br>
 
-      Daily house estimate: $${dailyInsight.toFixed(2)} (usage insight)<br>
-      Monthly house estimate: $${monthlyInsight.toFixed(0)} (usage insight)<br><br>
+      <b>Total estimates (all tariff periods)</b><br>
+      Daily estimate: $${daily.toFixed(2)}<br>
+      Monthly estimate: $${monthly.toFixed(0)}<br><br>
 
       <b>Comparison (vs comparison tariff)</b><br>
       Period would cost: $${comparePeriodCost.toFixed(2)} &nbsp; Savings: $${periodSavings.toFixed(2)}<br>
-      EV would cost: $${compareEvCost.toFixed(2)} &nbsp; Savings: $${evSavings.toFixed(2)}<br>
+      EV would cost: ${compareEvShow} &nbsp; Savings: ${evSavingsShow}<br>
       Daily would be: $${compareDaily.toFixed(2)} &nbsp; Savings: $${dailySavings.toFixed(2)}<br>
       Monthly would be: $${compareMonthly.toFixed(0)} &nbsp; Savings: $${monthlySavings.toFixed(0)}<br><br>
 
@@ -1156,13 +1148,15 @@
       const compareBlended = computeDailyMonthlyAtCompareTariffForReading(r);
       sumCompareDaily += compareBlended.daily;
       sumCompareMonthly += compareBlended.monthly;
-      const evCostR = computeEvCostForReading(r);
-      if(evCostR > 0){
-        sumEvCost += evCostR;
-        const evFrom = r.evFrom || "";
-        const evTo = r.evTo || "";
-        const dh = diffHours(evFrom, evTo);
-        sumEvChargeHours += dh !== null ? dh : (r.tariff === "OffPeak" ? getTariffDurations().offHours : r.tariff === "Peak" ? getTariffDurations().peakHours : getTariffDurations().shoulderHours);
+      if(!evMode){
+        const evCostR = computeEvCostForReading(r);
+        if(evCostR > 0){
+          sumEvCost += evCostR;
+          const evFrom = r.evFrom || "";
+          const evTo = r.evTo || "";
+          const dh = diffHours(evFrom, evTo);
+          sumEvChargeHours += dh !== null ? dh : (r.tariff === "OffPeak" ? getTariffDurations().offHours : r.tariff === "Peak" ? getTariffDurations().peakHours : getTariffDurations().shoulderHours);
+        }
       }
 
       if(settings.tariffType === "fixed"){
@@ -1194,8 +1188,10 @@
     const compareMonthly = sumCompareMonthly / rows.length;
     const dailySavings = daily - compareDaily;
     const monthlySavings = monthly - compareMonthly;
-    const dailyEv = sumEvChargeHours > 0 ? (sumEvCost / sumEvChargeHours) * 24 : 0;
+    const dailyEv = evMode ? 0 : (sumEvChargeHours > 0 ? (sumEvCost / sumEvChargeHours) * 24 : 0);
     const monthlyEv = dailyEv * 30;
+    const dailyEvShow = evMode ? "-" : "$" + dailyEv.toFixed(2);
+    const monthlyEvShow = evMode ? "-" : "$" + monthlyEv.toFixed(0);
 
     let tariffHTML = "";
     if(settings.tariffType === "fixed"){
@@ -1222,8 +1218,8 @@
       Daily Estimate: $${daily.toFixed(2)}<br>
       Monthly Estimate: $${monthly.toFixed(0)}<br><br>
 
-      Daily EV estimate: $${dailyEv.toFixed(2)}<br>
-      Monthly EV estimate: $${monthlyEv.toFixed(0)}<br><br>
+      Daily EV estimate: ${dailyEvShow}<br>
+      Monthly EV estimate: ${monthlyEvShow}<br><br>
 
       <b>Comparison (vs comparison tariff)</b><br>
       Daily would be: $${compareDaily.toFixed(2)} &nbsp; Savings: $${dailySavings.toFixed(2)}<br>
@@ -1699,17 +1695,19 @@
       const sumCompareDaily = filtered.reduce((a,r)=>a+computeDailyMonthlyAtCompareTariffForReading(r).daily,0);
       const sumCompareMonthly = filtered.reduce((a,r)=>a+computeDailyMonthlyAtCompareTariffForReading(r).monthly,0);
       let sumEvCost = 0, sumEvChargeHours = 0;
-      filtered.forEach(r=>{
-        const evCostR = computeEvCostForReading(r);
-        if(evCostR > 0){
-          sumEvCost += evCostR;
-          const dh = diffHours(r.evFrom||"", r.evTo||"");
-          sumEvChargeHours += dh !== null ? dh : 5;
-        }
-      });
+      if(!evMode){
+        filtered.forEach(r=>{
+          const evCostR = computeEvCostForReading(r);
+          if(evCostR > 0){
+            sumEvCost += evCostR;
+            const dh = diffHours(r.evFrom||"", r.evTo||"");
+            sumEvChargeHours += dh !== null ? dh : 5;
+          }
+        });
+      }
       const n = filtered.length;
       const daily = sumDaily/n, monthly = sumMonthly/n, compareDaily = sumCompareDaily/n, compareMonthly = sumCompareMonthly/n;
-      const dailyEv = sumEvChargeHours > 0 ? (sumEvCost/sumEvChargeHours)*24 : 0;
+      const dailyEv = evMode ? 0 : (sumEvChargeHours > 0 ? (sumEvCost/sumEvChargeHours)*24 : 0);
       const monthlyEv = dailyEv * 30;
       const csv = "Report,Totals\nReadings," + n + "\nDaily Estimate ($)," + daily.toFixed(2) + "\nMonthly Estimate ($)," + monthly.toFixed(0) + "\nDaily EV estimate ($)," + dailyEv.toFixed(2) + "\nMonthly EV estimate ($)," + monthlyEv.toFixed(0) + "\nComparison Daily ($)," + compareDaily.toFixed(2) + "\nComparison Monthly ($)," + compareMonthly.toFixed(0) + "\nDaily Savings ($)," + (daily - compareDaily).toFixed(2) + "\nMonthly Savings ($)," + (monthly - compareMonthly).toFixed(0) + "\n";
       const blob = new Blob([csv], {type:"text/csv"});
@@ -1733,7 +1731,7 @@
       const rate = Number(r.rate || 0);
       const costHr = adjustedCostPerHour(r);
       const {daily, monthly} = computeDailyMonthlyForReading(r);
-      const evCost = computeEvCostForReading(r);
+      const evCost = evMode ? 0 : computeEvCostForReading(r);
       let periodHours = 24;
       if(settings.tariffType !== "fixed"){
         const dur = getTariffDurations();
@@ -1741,7 +1739,7 @@
       }
       const periodEst = costHr * periodHours;
       const comparePeriod = adjKW * getCompareRate(d) * periodHours;
-      const compareEv = computeEvCostAtCompareTariff(r);
+      const compareEv = evMode ? 0 : computeEvCostAtCompareTariff(r);
       const {daily: compDaily, monthly: compMonthly} = computeDailyMonthlyAtCompareTariffForReading(r);
       const notes = (r.notes || "").replace(/"/g, '""');
       const evWindow = (r.evFrom && r.evTo) ? (r.evFrom + "-" + r.evTo) : "n/a";
