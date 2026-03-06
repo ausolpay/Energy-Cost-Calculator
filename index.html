@@ -1077,8 +1077,8 @@
     const periodDiff = comparePeriodCost - periodEstimate;
     const evDiff = evMode ? 0 : (compareEvCost - evCost);
 
-    const evCostShow = evMode ? "-" : evCost.toFixed(2);
-    const compareEvShow = evMode ? "-" : compareEvCost.toFixed(2);
+    const evCostShow = evMode ? "-" : "$" + evCost.toFixed(2);
+    const compareEvShow = evMode ? "-" : "$" + compareEvCost.toFixed(2);
     const periodDiffShow = periodDiff >= 0 ? `You pay $${periodDiff.toFixed(2)} less than comparison` : `You pay $${Math.abs(periodDiff).toFixed(2)} more than comparison`;
     const evDiffShow = evMode ? "-" : (evDiff >= 0 ? `You pay $${evDiff.toFixed(2)} less` : `You pay $${Math.abs(evDiff).toFixed(2)} more`);
 
@@ -1135,6 +1135,7 @@
     let sumAmpsOff = 0, sumAmpsPeak = 0, sumAmpsShoulder = 0, sumAmpsFixed = 0;
     let sumKwOff = 0, sumKwPeak = 0, sumKwShoulder = 0, sumKwFixed = 0;
     let totalEvKwh = 0;
+    let totalEvCostDollars = 0;
     let evReadingsCount = 0;
     const dur = getTariffDurations();
 
@@ -1161,6 +1162,7 @@
       })();
       if(evKw > 0 && !evMode){
         totalEvKwh += evKw * chargeHrs;
+        totalEvCostDollars += computeEvCostForReading(r);
         evReadingsCount++;
       }
 
@@ -1218,7 +1220,7 @@
     const minD = new Date(Math.min(...dates));
     const maxD = new Date(Math.max(...dates));
     const daysSpan = Math.max(1, Math.ceil((maxD - minD) / (24*60*60*1000)) + 1);
-    const monthlyEvKwhEst = evReadingsCount > 0 ? (totalEvKwh / daysSpan) * 30 : 0;
+    const monthlyEvCostEst = evReadingsCount > 0 ? (totalEvCostDollars / daysSpan) * 30 : 0;
 
     let tariffHTML = "";
     if(settings.tariffType === "fixed"){
@@ -1247,9 +1249,11 @@
 
       <b>Totals (monthly estimates from period averages)</b><br>
       Total Amps (monthly est. amp-hr): ${monthlyAmpsEst.toFixed(0)}<br>
-      Total kW (monthly est. kWh): ${monthlyKwEst.toFixed(1)}<br>
+      Total kW (monthly est. kWh): ${monthlyKwEst.toFixed(1)}<br><br>
+
+      <b>Total EV</b><br>
       Total EV usage (from ${evReadingsCount} readings with EV): ${totalEvKwh.toFixed(1)} kWh in period<br>
-      Monthly EV estimate (kWh): ${monthlyEvKwhEst.toFixed(1)}<br><br>
+      Total EV monthly cost (from readings & their periods): ${evMode ? "-" : "$" + monthlyEvCostEst.toFixed(2)}<br><br>
 
       <b>Comparison (vs comparison tariff)</b><br>
       Daily would be: $${(sumCompareDaily/rows.length).toFixed(2)} &nbsp; Savings: $${(daily - sumCompareDaily/rows.length).toFixed(2)}<br>
