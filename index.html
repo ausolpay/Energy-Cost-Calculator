@@ -312,7 +312,8 @@
   </div>
   <div class="spacer"></div>
 
-  <button id="calcBtn" type="button" onclick="calculate()">Calculate</button>
+  <input id="notesInput" type="text" placeholder="Optional notes" style="margin-bottom:10px;">
+  <button id="calcBtn" type="button" onclick="calculate()">Add</button>
   <div class="spacer"></div>
 
   <div class="controls">
@@ -421,6 +422,33 @@
       <input id="fixedRate" type="number" step="0.0001" min="0">
     </div>
 
+    <span class="label" style="margin-top:14px;">Comparison tariff (for savings)</span>
+    <select id="compareTariffType">
+      <option value="fixed">Fixed rate</option>
+      <option value="tou">TOU (time-of-use)</option>
+    </select>
+
+    <div id="compareFixedSettings">
+      <span class="label">Comparison fixed rate ($/kWh)</span>
+      <input id="compareFixedRate" type="number" step="0.0001" min="0">
+    </div>
+    <div id="compareTouSettings" style="display:none;">
+      <span class="label">Off peak (comparison)</span>
+      <div class="row2">
+        <input id="compareOffStart" type="time" placeholder="Start">
+        <input id="compareOffEnd" type="time" placeholder="End">
+      </div>
+      <input id="compareOffRate" type="number" step="0.0001" min="0" placeholder="Off rate">
+      <span class="label">Peak (comparison)</span>
+      <div class="row2">
+        <input id="comparePeakStart" type="time">
+        <input id="comparePeakEnd" type="time">
+      </div>
+      <input id="comparePeakRate" type="number" step="0.0001" min="0">
+      <span class="label">Shoulder rate (comparison)</span>
+      <input id="compareShoulderRate" type="number" step="0.0001" min="0">
+    </div>
+
     <div class="spacer"></div>
 
     <div class="controls">
@@ -433,13 +461,38 @@
 <div class="modalOverlay" id="exportOverlay" onclick="overlayClick(event)">
   <div class="modal" role="dialog" aria-modal="true">
     <h3>Export CSV</h3>
-    <span class="label" style="margin-top:0;">Select range</span>
-    <select id="exportRange">
-      <option value="30">Last 30 days</option>
-      <option value="60">Last 60 days</option>
-      <option value="90">Last 90 days</option>
-      <option value="0">All time</option>
+    <span class="label" style="margin-top:0;">Report type</span>
+    <select id="exportReportType">
+      <option value="history">History report</option>
+      <option value="totals">Totals report</option>
     </select>
+
+    <div id="exportHistoryRangeWrap">
+      <span class="label">Range (History)</span>
+      <select id="exportRange">
+        <option value="30">Last 30 days</option>
+        <option value="60">Last 60 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="0">All time</option>
+        <option value="custom">Custom range</option>
+      </select>
+    </div>
+    <div id="exportTotalsRangeWrap" style="display:none;">
+      <span class="label">Range (Totals)</span>
+      <select id="exportTotalsRange">
+        <option value="current">Current month</option>
+        <option value="3">Last 3 months</option>
+        <option value="6">Last 6 months</option>
+        <option value="custom">Custom range</option>
+      </select>
+    </div>
+
+    <div id="exportCustomRange" style="display:none;">
+      <span class="label">From date</span>
+      <input id="exportFromDate" type="date">
+      <span class="label">To date</span>
+      <input id="exportToDate" type="date">
+    </div>
 
     <div class="modalActions">
       <button type="button" onclick="closeExportModal()">Cancel</button>
@@ -469,6 +522,9 @@
       </div>
     </div>
 
+    <span class="label">Notes</span>
+    <input id="editNotes" type="text" placeholder="Optional notes">
+
     <div class="modalActions">
       <button type="button" onclick="closeEditModal()">Cancel</button>
       <button type="button" class="primary" onclick="saveEdit()">Save</button>
@@ -493,7 +549,17 @@
 
     shoulderRate:0.2637,
 
-    fixedRate:0.25
+    fixedRate:0.25,
+
+    compareTariffType:"fixed",
+    compareFixedRate:0.32973,
+    compareOffStart:"11:00",
+    compareOffEnd:"16:00",
+    compareOffRate:0.08,
+    comparePeakStart:"16:00",
+    comparePeakEnd:"21:00",
+    comparePeakRate:0.50,
+    compareShoulderRate:0.25
   }));
 
   let page = 0;
@@ -533,6 +599,39 @@
     return settings.shoulderRate;
   }
 
+  function getCompareTariff(date){
+    if(settings.compareTariffType === "fixed") return "Fixed";
+    const minutes = date.getHours()*60 + date.getMinutes();
+    const offStart = parseTime(settings.compareOffStart);
+    const offEnd = parseTime(settings.compareOffEnd);
+    const peakStart = parseTime(settings.comparePeakStart);
+    const peakEnd = parseTime(settings.comparePeakEnd);
+    if(minutes >= offStart && minutes < offEnd) return "OffPeak";
+    if(minutes >= peakStart && minutes < peakEnd) return "Peak";
+    return "Shoulder";
+  }
+
+  function getCompareRate(date){
+    if(settings.compareTariffType === "fixed") return Number(settings.compareFixedRate || 0.32973);
+    const t = getCompareTariff(date);
+    if(t === "OffPeak") return Number(settings.compareOffRate || 0);
+    if(t === "Peak") return Number(settings.comparePeakRate || 0);
+    return Number(settings.compareShoulderRate || 0);
+  }
+
+  function getCompareTariffDurations(){
+    if(settings.compareTariffType === "fixed") return {offHours:0, peakHours:0, shoulderHours:24};
+    const offStart = parseTime(settings.compareOffStart);
+    const offEnd = parseTime(settings.compareOffEnd);
+    const peakStart = parseTime(settings.comparePeakStart);
+    const peakEnd = parseTime(settings.comparePeakEnd);
+    let offHours = Math.max(0, (offEnd - offStart) / 60);
+    let peakHours = Math.max(0, (peakEnd - peakStart) / 60);
+    let shoulderHours = 24 - offHours - peakHours;
+    if(shoulderHours < 0) shoulderHours = 0;
+    return {offHours, peakHours, shoulderHours};
+  }
+
   // ===== Tariff duration + blended daily/monthly helpers =====
   function getTariffDurations(){
     // Returns approximate hours per day for each tariff bucket based on settings
@@ -551,6 +650,21 @@
     if(shoulderHours < 0) shoulderHours = 0;
 
     return {offHours, peakHours, shoulderHours};
+  }
+
+  function computeDailyMonthlyFromKW(adjKW){
+    let daily = 0;
+    if(settings.tariffType === "fixed"){
+      daily = adjKW * Number(settings.fixedRate || 0) * 24;
+    } else {
+      const {offHours, peakHours, shoulderHours} = getTariffDurations();
+      daily = adjKW * (
+        Number(settings.offRate||0)*offHours +
+        Number(settings.peakRate||0)*peakHours +
+        Number(settings.shoulderRate||0)*shoulderHours
+      );
+    }
+    return {daily, monthly: daily * 30};
   }
 
   function parseTimeToMinutes(t){
@@ -709,6 +823,72 @@
     }
   }
 
+  function computeEvCostAtCompareTariff(r){
+    const evKW = Number(r.ev || 0);
+    if(evKW <= 0) return 0;
+    if(settings.compareTariffType === "fixed"){
+      const rate = Number(settings.compareFixedRate || 0.32973);
+      const evFrom = r.evFrom || "";
+      const evTo = r.evTo || "";
+      const diff = diffHours(evFrom, evTo);
+      const chargeHours = diff !== null ? diff : 24;
+      return evKW * rate * chargeHours;
+    }
+    const offRate = Number(settings.compareOffRate || 0);
+    const peakRate = Number(settings.comparePeakRate || 0);
+    const shoulderRate = Number(settings.compareShoulderRate || 0);
+    const evFrom = r.evFrom || "";
+    const evTo = r.evTo || "";
+    const s = parseTimeToMinutes(evFrom);
+    const e = parseTimeToMinutes(evTo);
+    if(s === null || e === null){
+      const compT = getCompareTariff(new Date(r.time));
+      const {offHours, peakHours, shoulderHours} = getCompareTariffDurations();
+      let windowHours = 0, windowRate = 0;
+      if(compT === "OffPeak"){ windowHours = offHours; windowRate = offRate; }
+      else if(compT === "Peak"){ windowHours = peakHours; windowRate = peakRate; }
+      else { windowHours = shoulderHours; windowRate = shoulderRate; }
+      return evKW * windowRate * windowHours;
+    }
+    const segments = e > s ? [[s,e]] : [[s,24*60],[0,e]];
+    const offStart = parseTime(settings.compareOffStart);
+    const offEnd = parseTime(settings.compareOffEnd);
+    const peakStart = parseTime(settings.comparePeakStart);
+    const peakEnd = parseTime(settings.comparePeakEnd);
+    function overlapMinutes(a,b,c,d){ return Math.max(0, Math.min(b,d) - Math.max(a,c)); }
+    let oM = 0, pM = 0, sM = 0;
+    segments.forEach(seg=>{
+      const len = seg[1]-seg[0];
+      oM += overlapMinutes(seg[0],seg[1],offStart,offEnd);
+      pM += overlapMinutes(seg[0],seg[1],peakStart,peakEnd);
+      sM += Math.max(0, len - overlapMinutes(seg[0],seg[1],offStart,offEnd) - overlapMinutes(seg[0],seg[1],peakStart,peakEnd));
+    });
+    return evKW * (offRate*(oM/60) + peakRate*(pM/60) + shoulderRate*(sM/60));
+  }
+
+  function computeDailyMonthlyAtCompareTariffForReading(r){
+    const baseKW = Number(r.kw || 0);
+    const evKW = Number(r.ev || 0);
+    const houseKW = Math.max(0, baseKW - evKW);
+    if(settings.compareTariffType === "fixed"){
+      const rate = Number(settings.compareFixedRate || 0.32973);
+      const daily = (houseKW * rate * 24) + (evMode ? 0 : computeEvCostAtCompareTariff(r));
+      return {daily, monthly: daily * 30};
+    }
+    const {offHours, peakHours, shoulderHours} = getCompareTariffDurations();
+    const offR = Number(settings.compareOffRate || 0);
+    const peakR = Number(settings.comparePeakRate || 0);
+    const shoulderR = Number(settings.compareShoulderRate || 0);
+    let daily = houseKW * (offR*offHours + peakR*peakHours + shoulderR*shoulderHours);
+    if(!evMode && evKW > 0) daily += computeEvCostAtCompareTariff(r);
+    return {daily, monthly: daily * 30};
+  }
+
+  function getReadingsInSameTariffPeriod(r){
+    const t0 = new Date(r.time).getTime();
+    return history.filter(x => getTariff(new Date(x.time)) === r.tariff && new Date(x.time).getTime() <= t0);
+  }
+
   // ===== EV adjusters =====
   function adjustedKW(r){
     const base = Number(r.kw || 0);
@@ -775,6 +955,7 @@
     const rate = getRate(now);
     const tariff = getTariff(now);
 
+    const notesInput = document.getElementById("notesInput");
     const entry = {
       time: now.toISOString(),
       amps: amps,
@@ -783,7 +964,8 @@
       evFrom: evFromInput.value || "",
       evTo: evToInput.value || "",
       rate: rate,
-      tariff: tariff
+      tariff: tariff,
+      notes: (notesInput && notesInput.value) ? notesInput.value.trim() : ""
     };
 
     history.unshift(entry);
@@ -792,11 +974,12 @@
     page = 0;
     selectedIndex = 0;
 
-    // Clear inputs after successful calculation
+    // Clear inputs after successful add
     ampsInput.value = "";
     evInput.value = "";
     evFromInput.value = "";
     evToInput.value = "";
+    if(notesInput) notesInput.value = "";
 
     renderHistory();
     renderAvg();
@@ -874,21 +1057,40 @@
     // EV-only cost estimate for its charging window and tariff
     const evCost = computeEvCostForReading(r);
 
-    // Period estimate for the current tariff window (e.g. OffPeak / Peak / Shoulder)
+    // Period estimate for the current tariff window
     let periodHours = 24;
     if(settings.tariffType === "fixed"){
       periodHours = 24;
     } else {
       const {offHours, peakHours, shoulderHours} = getTariffDurations();
-      if(r.tariff === "OffPeak"){
-        periodHours = offHours;
-      } else if(r.tariff === "Peak"){
-        periodHours = peakHours;
-      } else {
-        periodHours = shoulderHours;
-      }
+      if(r.tariff === "OffPeak") periodHours = offHours;
+      else if(r.tariff === "Peak") periodHours = peakHours;
+      else periodHours = shoulderHours;
     }
-    const periodEstimate = costHr * periodHours;
+    const periodEstimateRaw = costHr * periodHours;
+
+    // Usage insights: same tariff period readings up to and including this one
+    const samePeriod = getReadingsInSameTariffPeriod(r);
+    let periodEstimate = periodEstimateRaw;
+    let dailyInsight = daily;
+    let monthlyInsight = monthly;
+    if(samePeriod.length){
+      const avgCostHr = samePeriod.reduce((a,x)=>a+adjustedCostPerHour(x),0)/samePeriod.length;
+      const avgKW = samePeriod.reduce((a,x)=>a+adjustedKW(x),0)/samePeriod.length;
+      periodEstimate = avgCostHr * periodHours;
+      const blended = computeDailyMonthlyFromKW(avgKW);
+      dailyInsight = blended.daily;
+      monthlyInsight = blended.monthly;
+    }
+
+    // Comparison tariff costs and savings
+    const comparePeriodCost = adjKW * getCompareRate(new Date(r.time)) * periodHours;
+    const compareEvCost = computeEvCostAtCompareTariff(r);
+    const {daily: compareDaily, monthly: compareMonthly} = computeDailyMonthlyAtCompareTariffForReading(r);
+    const periodSavings = periodEstimateRaw - comparePeriodCost;
+    const evSavings = evCost - compareEvCost;
+    const dailySavings = daily - compareDaily;
+    const monthlySavings = monthly - compareMonthly;
 
     document.getElementById("details").innerHTML = `
       <b>Full Details (${evMode ? "-EV" : "All"})</b><br><br>
@@ -905,10 +1107,18 @@
 
       EV charge window: ${r.evFrom && r.evTo ? `${r.evFrom}–${r.evTo}` : "n/a"}<br>
       EV charge cost (est): $${evCost.toFixed(2)}<br>
-      Tariff period estimate: $${periodEstimate.toFixed(2)}<br><br>
+      Tariff period estimate: $${periodEstimate.toFixed(2)} (usage insight)<br><br>
 
-      Daily house estimate: $${daily.toFixed(2)}<br>
-      Monthly house estimate: $${monthly.toFixed(0)}<br><br>
+      Daily house estimate: $${dailyInsight.toFixed(2)} (usage insight)<br>
+      Monthly house estimate: $${monthlyInsight.toFixed(0)} (usage insight)<br><br>
+
+      <b>Comparison (vs comparison tariff)</b><br>
+      Period would cost: $${comparePeriodCost.toFixed(2)} &nbsp; Savings: $${periodSavings.toFixed(2)}<br>
+      EV would cost: $${compareEvCost.toFixed(2)} &nbsp; Savings: $${evSavings.toFixed(2)}<br>
+      Daily would be: $${compareDaily.toFixed(2)} &nbsp; Savings: $${dailySavings.toFixed(2)}<br>
+      Monthly would be: $${compareMonthly.toFixed(0)} &nbsp; Savings: $${monthlySavings.toFixed(0)}<br><br>
+
+      Notes: ${(r.notes || "-").replace(/</g,"&lt;")}<br><br>
 
       <div class="detailsActions">
         <button type="button" class="deleteBtn" onclick="deleteCurrentReading()">Delete</button>
@@ -933,12 +1143,27 @@
     let countOff = 0, countPeak = 0, countShoulder = 0, countFixed = 0;
     let sumDaily = 0;
     let sumMonthly = 0;
+    let sumCompareDaily = 0;
+    let sumCompareMonthly = 0;
+    let sumEvCost = 0;
+    let sumEvChargeHours = 0;
 
     rows.forEach(r=>{
       const cost = adjustedCostPerHour(r);
       const blended = computeDailyMonthlyForReading(r);
       sumDaily += blended.daily;
       sumMonthly += blended.monthly;
+      const compareBlended = computeDailyMonthlyAtCompareTariffForReading(r);
+      sumCompareDaily += compareBlended.daily;
+      sumCompareMonthly += compareBlended.monthly;
+      const evCostR = computeEvCostForReading(r);
+      if(evCostR > 0){
+        sumEvCost += evCostR;
+        const evFrom = r.evFrom || "";
+        const evTo = r.evTo || "";
+        const dh = diffHours(evFrom, evTo);
+        sumEvChargeHours += dh !== null ? dh : (r.tariff === "OffPeak" ? getTariffDurations().offHours : r.tariff === "Peak" ? getTariffDurations().peakHours : getTariffDurations().shoulderHours);
+      }
 
       if(settings.tariffType === "fixed"){
         fixed += cost;
@@ -965,6 +1190,12 @@
     const daily = sumDaily / rows.length;
     const monthly = sumMonthly / rows.length;
     const totalAvg = daily / 24;
+    const compareDaily = sumCompareDaily / rows.length;
+    const compareMonthly = sumCompareMonthly / rows.length;
+    const dailySavings = daily - compareDaily;
+    const monthlySavings = monthly - compareMonthly;
+    const dailyEv = sumEvChargeHours > 0 ? (sumEvCost / sumEvChargeHours) * 24 : 0;
+    const monthlyEv = dailyEv * 30;
 
     let tariffHTML = "";
     if(settings.tariffType === "fixed"){
@@ -989,7 +1220,14 @@
       Average Cost/hr: $${totalAvg.toFixed(4)}<br>
 
       Daily Estimate: $${daily.toFixed(2)}<br>
-      Monthly Estimate: $${monthly.toFixed(0)}
+      Monthly Estimate: $${monthly.toFixed(0)}<br><br>
+
+      Daily EV estimate: $${dailyEv.toFixed(2)}<br>
+      Monthly EV estimate: $${monthlyEv.toFixed(0)}<br><br>
+
+      <b>Comparison (vs comparison tariff)</b><br>
+      Daily would be: $${compareDaily.toFixed(2)} &nbsp; Savings: $${dailySavings.toFixed(2)}<br>
+      Monthly would be: $${compareMonthly.toFixed(0)} &nbsp; Savings: $${monthlySavings.toFixed(0)}
     `;
   }
 
@@ -1211,11 +1449,30 @@
     document.getElementById("shoulderRate").value = settings.shoulderRate;
     document.getElementById("fixedRate").value = settings.fixedRate;
 
+    document.getElementById("compareTariffType").value = settings.compareTariffType || "fixed";
+    document.getElementById("compareFixedRate").value = settings.compareFixedRate ?? 0.32973;
+    document.getElementById("compareOffStart").value = settings.compareOffStart || "11:00";
+    document.getElementById("compareOffEnd").value = settings.compareOffEnd || "16:00";
+    document.getElementById("compareOffRate").value = settings.compareOffRate ?? 0.08;
+    document.getElementById("comparePeakStart").value = settings.comparePeakStart || "16:00";
+    document.getElementById("comparePeakEnd").value = settings.comparePeakEnd || "21:00";
+    document.getElementById("comparePeakRate").value = settings.comparePeakRate ?? 0.50;
+    document.getElementById("compareShoulderRate").value = settings.compareShoulderRate ?? 0.25;
+
     toggleTariffSettingsUI();
+    toggleCompareTariffSettingsUI();
 
     document.getElementById("mainView").style.display = "none";
     document.getElementById("settingsView").style.display = "block";
   }
+
+  function toggleCompareTariffSettingsUI(){
+    const isFixed = document.getElementById("compareTariffType").value === "fixed";
+    document.getElementById("compareFixedSettings").style.display = isFixed ? "block" : "none";
+    document.getElementById("compareTouSettings").style.display = isFixed ? "none" : "block";
+  }
+
+  document.getElementById("compareTariffType").addEventListener("change", toggleCompareTariffSettingsUI);
 
   function closeSettings(){
     document.getElementById("settingsView").style.display = "none";
@@ -1247,6 +1504,16 @@
     settings.shoulderRate = parseFloat(document.getElementById("shoulderRate").value) || settings.shoulderRate;
     settings.fixedRate = parseFloat(document.getElementById("fixedRate").value) || settings.fixedRate;
 
+    settings.compareTariffType = document.getElementById("compareTariffType").value;
+    settings.compareFixedRate = parseFloat(document.getElementById("compareFixedRate").value) ?? 0.32973;
+    settings.compareOffStart = document.getElementById("compareOffStart").value || "11:00";
+    settings.compareOffEnd = document.getElementById("compareOffEnd").value || "16:00";
+    settings.compareOffRate = parseFloat(document.getElementById("compareOffRate").value) ?? settings.compareOffRate;
+    settings.comparePeakStart = document.getElementById("comparePeakStart").value || "16:00";
+    settings.comparePeakEnd = document.getElementById("comparePeakEnd").value || "21:00";
+    settings.comparePeakRate = parseFloat(document.getElementById("comparePeakRate").value) ?? settings.comparePeakRate;
+    settings.compareShoulderRate = parseFloat(document.getElementById("compareShoulderRate").value) ?? settings.compareShoulderRate;
+
     localStorage.setItem("settings", JSON.stringify(settings));
 
     closeSettings();
@@ -1255,7 +1522,21 @@
   // ===== Export modal =====
   function openExportModal(){
     document.getElementById("exportOverlay").style.display = "flex";
+    updateExportModalUI();
   }
+
+  function updateExportModalUI(){
+    const reportType = document.getElementById("exportReportType").value;
+    const isHistory = reportType === "history";
+    document.getElementById("exportHistoryRangeWrap").style.display = isHistory ? "block" : "none";
+    document.getElementById("exportTotalsRangeWrap").style.display = isHistory ? "none" : "block";
+    const rangeVal = isHistory ? document.getElementById("exportRange").value : document.getElementById("exportTotalsRange").value;
+    document.getElementById("exportCustomRange").style.display = rangeVal === "custom" ? "block" : "none";
+  }
+
+  document.getElementById("exportReportType").addEventListener("change", updateExportModalUI);
+  document.getElementById("exportRange").addEventListener("change", updateExportModalUI);
+  document.getElementById("exportTotalsRange").addEventListener("change", updateExportModalUI);
   function closeExportModal(){
     document.getElementById("exportOverlay").style.display = "none";
   }
@@ -1269,6 +1550,7 @@
     document.getElementById("editEv").value = r.ev ?? "";
     document.getElementById("editEvFrom").value = r.evFrom || "";
     document.getElementById("editEvTo").value = r.evTo || "";
+    document.getElementById("editNotes").value = r.notes || "";
     document.getElementById("editOverlay").style.display = "flex";
   }
 
@@ -1304,6 +1586,7 @@
     r.ev = evVal;
     r.evFrom = fromVal;
     r.evTo = toVal;
+    r.notes = (document.getElementById("editNotes").value || "").trim();
 
     history[idx] = r;
     localStorage.setItem("history", JSON.stringify(history));
@@ -1358,18 +1641,51 @@
     }
   }
   function confirmExport(){
-    const days = parseInt(document.getElementById("exportRange").value, 10);
+    const reportType = document.getElementById("exportReportType").value;
+    const isHistory = reportType === "history";
+    const rangeVal = isHistory ? document.getElementById("exportRange").value : document.getElementById("exportTotalsRange").value;
+    let fromDate = "", toDate = "";
+    if(rangeVal === "custom"){
+      fromDate = document.getElementById("exportFromDate").value || "";
+      toDate = document.getElementById("exportToDate").value || "";
+      if(!fromDate || !toDate){
+        alert("Please select From and To dates for custom range.");
+        return;
+      }
+    }
     closeExportModal();
-    exportCSV(days);
+    exportCSV(reportType, rangeVal, fromDate, toDate);
   }
 
-  function exportCSV(days){
+  function exportCSV(reportType, rangeVal, fromDate, toDate){
+    const isHistory = reportType === "history";
     let filtered = history;
+    const fromD = fromDate ? new Date(fromDate) : null;
+    const toD = toDate ? new Date(toDate) : null;
 
-    if(days > 0){
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - days);
-      filtered = history.filter(r => new Date(r.time) >= cutoff);
+    if(isHistory){
+      if(rangeVal === "custom" && fromD && toD){
+        filtered = history.filter(r => { const t = new Date(r.time); return t >= fromD && t <= toD; });
+      } else if(rangeVal !== "custom" && rangeVal !== "0"){
+        const days = parseInt(rangeVal, 10);
+        if(days > 0){
+          const cutoff = new Date();
+          cutoff.setDate(cutoff.getDate() - days);
+          filtered = history.filter(r => new Date(r.time) >= cutoff);
+        }
+      }
+    } else {
+      const now = new Date();
+      if(rangeVal === "current"){
+        const m = now.getMonth();
+        filtered = history.filter(r => new Date(r.time).getMonth() === m);
+      } else if(rangeVal === "3" || rangeVal === "6"){
+        const months = parseInt(rangeVal, 10);
+        const start = new Date(now.getFullYear(), now.getMonth() - months, 1);
+        filtered = history.filter(r => new Date(r.time) >= start);
+      } else if(rangeVal === "custom" && fromD && toD){
+        filtered = history.filter(r => { const t = new Date(r.time); return t >= fromD && t <= toD; });
+      }
     }
 
     if(!filtered.length){
@@ -1377,40 +1693,60 @@
       return;
     }
 
-    let csv = "ISO Time,Date,Time,Amps,kW,EV_kW,Adjusted_kW,Rate($/kWh),CostPerHour($/hr),Tariff,DailyEstimate($),MonthlyEstimate($),Mode\n";
+    if(!isHistory){
+      const sumDaily = filtered.reduce((a,r)=>a+computeDailyMonthlyForReading(r).daily,0);
+      const sumMonthly = filtered.reduce((a,r)=>a+computeDailyMonthlyForReading(r).monthly,0);
+      const sumCompareDaily = filtered.reduce((a,r)=>a+computeDailyMonthlyAtCompareTariffForReading(r).daily,0);
+      const sumCompareMonthly = filtered.reduce((a,r)=>a+computeDailyMonthlyAtCompareTariffForReading(r).monthly,0);
+      let sumEvCost = 0, sumEvChargeHours = 0;
+      filtered.forEach(r=>{
+        const evCostR = computeEvCostForReading(r);
+        if(evCostR > 0){
+          sumEvCost += evCostR;
+          const dh = diffHours(r.evFrom||"", r.evTo||"");
+          sumEvChargeHours += dh !== null ? dh : 5;
+        }
+      });
+      const n = filtered.length;
+      const daily = sumDaily/n, monthly = sumMonthly/n, compareDaily = sumCompareDaily/n, compareMonthly = sumCompareMonthly/n;
+      const dailyEv = sumEvChargeHours > 0 ? (sumEvCost/sumEvChargeHours)*24 : 0;
+      const monthlyEv = dailyEv * 30;
+      const csv = "Report,Totals\nReadings," + n + "\nDaily Estimate ($)," + daily.toFixed(2) + "\nMonthly Estimate ($)," + monthly.toFixed(0) + "\nDaily EV estimate ($)," + dailyEv.toFixed(2) + "\nMonthly EV estimate ($)," + monthlyEv.toFixed(0) + "\nComparison Daily ($)," + compareDaily.toFixed(2) + "\nComparison Monthly ($)," + compareMonthly.toFixed(0) + "\nDaily Savings ($)," + (daily - compareDaily).toFixed(2) + "\nMonthly Savings ($)," + (monthly - compareMonthly).toFixed(0) + "\n";
+      const blob = new Blob([csv], {type:"text/csv"});
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "energy_totals.csv";
+      a.click();
+      URL.revokeObjectURL(a.href);
+      return;
+    }
 
-    let totalAmps=0, totalKW=0, totalEV=0, totalAdjKW=0, totalRate=0, totalCost=0, totalDaily=0, totalMonthly=0;
+    let csv = "ISO Time,Date,Time,Amps,kW,EV_kW,Adjusted_kW,Rate($/kWh),CostPerHour($/hr),Tariff,EV_charge_window,EV_charge_cost($),Tariff_period_est($),Daily_est($),Monthly_est($),Comparison_period($),Comparison_EV($),Comparison_daily($),Comparison_monthly($),Period_savings($),EV_savings($),Daily_savings($),Monthly_savings($),Notes,Mode\n";
 
     filtered.forEach(r=>{
       const d = new Date(r.time);
       const date = d.toLocaleDateString("en-AU");
       const time = d.toLocaleTimeString("en-AU",{hour:'2-digit',minute:'2-digit'});
-
       const baseKW = Number(r.kw || 0);
       const evKW = Number(r.ev || 0);
       const adjKW = adjustedKW(r);
-
       const rate = Number(r.rate || 0);
       const costHr = adjustedCostPerHour(r);
-      const blended = computeDailyMonthlyFromKW(adjKW);
-      const daily = blended.daily;
-      const monthly = blended.monthly;
-
-      totalAmps += Number(r.amps || 0);
-      totalKW += baseKW;
-      totalEV += evKW;
-      totalAdjKW += adjKW;
-      totalRate += rate;
-      totalCost += costHr;
-      totalDaily += daily;
-      totalMonthly += monthly;
-
-      csv += `${r.time},${date},${time},${r.amps},${baseKW},${evKW},${adjKW},${rate},${costHr},${r.tariff || "-"},${daily},${monthly},${evMode ? "-EV" : "All"}\n`;
+      const {daily, monthly} = computeDailyMonthlyForReading(r);
+      const evCost = computeEvCostForReading(r);
+      let periodHours = 24;
+      if(settings.tariffType !== "fixed"){
+        const dur = getTariffDurations();
+        periodHours = r.tariff === "OffPeak" ? dur.offHours : r.tariff === "Peak" ? dur.peakHours : dur.shoulderHours;
+      }
+      const periodEst = costHr * periodHours;
+      const comparePeriod = adjKW * getCompareRate(d) * periodHours;
+      const compareEv = computeEvCostAtCompareTariff(r);
+      const {daily: compDaily, monthly: compMonthly} = computeDailyMonthlyAtCompareTariffForReading(r);
+      const notes = (r.notes || "").replace(/"/g, '""');
+      const evWindow = (r.evFrom && r.evTo) ? (r.evFrom + "-" + r.evTo) : "n/a";
+      csv += `"${r.time}",${date},${time},${r.amps},${baseKW},${evKW},${adjKW},${rate},${costHr},${r.tariff||"-"},${evWindow},${evCost.toFixed(2)},${periodEst.toFixed(2)},${daily.toFixed(2)},${monthly.toFixed(0)},${comparePeriod.toFixed(2)},${compareEv.toFixed(2)},${compDaily.toFixed(2)},${compMonthly.toFixed(0)},${(periodEst-comparePeriod).toFixed(2)},${(evCost-compareEv).toFixed(2)},${(daily-compDaily).toFixed(2)},${(monthly-compMonthly).toFixed(0)},"${notes}",${evMode?"-EV":"All"}\n`;
     });
-
-    const count = filtered.length;
-
-    csv += `\n**AVERAGES**, , ,${(totalAmps/count).toFixed(2)},${(totalKW/count).toFixed(6)},${(totalEV/count).toFixed(6)},${(totalAdjKW/count).toFixed(6)},${(totalRate/count).toFixed(6)},${(totalCost/count).toFixed(6)}, ,${(totalDaily/count).toFixed(2)},${(totalMonthly/count).toFixed(0)},${evMode ? "-EV" : "All"}\n`;
 
     const blob = new Blob([csv], {type:"text/csv"});
     const a = document.createElement("a");
