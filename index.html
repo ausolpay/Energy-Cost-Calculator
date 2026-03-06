@@ -1070,15 +1070,17 @@
     // This period only: cost if usage continued at this rate for the full tariff window
     const periodEstimate = costHr * periodHours;
 
-    // Comparison (respect -EV: no EV comparison when in -EV mode)
-    const comparePeriodCost = adjKW * getCompareRate(new Date(r.time)) * periodHours;
+    // Comparison: same usage for this period at your rate vs comparison rate
+    const compareRate = getCompareRate(new Date(r.time));
+    const comparePeriodCost = adjKW * compareRate * periodHours;
     const compareEvCost = evMode ? 0 : computeEvCostAtCompareTariff(r);
-    const periodSavings = periodEstimate - comparePeriodCost;
-    const evSavings = evMode ? 0 : (evCost - compareEvCost);
+    const periodDiff = comparePeriodCost - periodEstimate;
+    const evDiff = evMode ? 0 : (compareEvCost - evCost);
 
     const evCostShow = evMode ? "-" : evCost.toFixed(2);
     const compareEvShow = evMode ? "-" : compareEvCost.toFixed(2);
-    const evSavingsShow = evMode ? "-" : evSavings.toFixed(2);
+    const periodDiffShow = periodDiff >= 0 ? `You pay $${periodDiff.toFixed(2)} less than comparison` : `You pay $${Math.abs(periodDiff).toFixed(2)} more than comparison`;
+    const evDiffShow = evMode ? "-" : (evDiff >= 0 ? `You pay $${evDiff.toFixed(2)} less` : `You pay $${Math.abs(evDiff).toFixed(2)} more`);
 
     document.getElementById("details").innerHTML = `
       <b>Full Details (${evMode ? "-EV" : "All"})</b><br><br>
@@ -1097,9 +1099,13 @@
       EV charge cost (est): ${evCostShow}<br>
       Tariff period estimate (this ${r.tariff || "period"} only): $${periodEstimate.toFixed(2)}<br><br>
 
-      <b>Comparison (vs comparison tariff)</b><br>
-      Period would cost: $${comparePeriodCost.toFixed(2)} &nbsp; Savings: $${periodSavings.toFixed(2)}<br>
-      EV would cost: ${compareEvShow} &nbsp; Savings: ${evSavingsShow}<br><br>
+      <b>Comparison (same usage at comparison rate)</b><br>
+      This period at your rate: $${periodEstimate.toFixed(2)}<br>
+      Same period at comparison rate ($${compareRate.toFixed(4)}/kWh): $${comparePeriodCost.toFixed(2)}<br>
+      ${periodDiffShow}<br><br>
+      EV charge at your rate: ${evCostShow}<br>
+      EV charge at comparison rate: ${compareEvShow}<br>
+      ${evMode ? "" : evDiffShow + "<br>"}<br>
 
       Notes: ${(r.notes || "-").replace(/</g,"&lt;")}<br><br>
 
