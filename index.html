@@ -286,16 +286,20 @@
     background:#2a2a2a;
     border:none;
     color:#fff;
-    padding:4px 8px;
+    padding:4px 4px;
     border-radius:8px;
     cursor:pointer;
-    font-size:14px;
-    min-width:32px;
+    font-size:12px;
+    min-width:24px;
   }
   .usageNavBtn:hover{ background:#3a3a3a; }
+  @media (max-width:768px){
+    .usageNavBtn{ padding:4px 8px; font-size:14px; min-width:32px; }
+  }
   .usageDateRange{
     font-size:14px;
     color:#ccc;
+    white-space:nowrap;
   }
   tr.usageDayCurrent{ background:#2a3a4a; }
   #usageBody tr.selected{ background:#1a4a6a; }
