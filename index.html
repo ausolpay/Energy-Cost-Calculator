@@ -321,7 +321,10 @@
 
 <div id="mainView">
 
-  <input id="amps" type="number" placeholder="Enter Amps" step="any" min="0">
+  <div class="row2" style="gap:8px;">
+    <input id="amps" type="number" placeholder="Amps" step="any" min="0">
+    <input id="kwIn" type="number" placeholder="or kW" step="any" min="0">
+  </div>
   <div class="spacer"></div>
 
   <input id="evkw" type="number" placeholder="Optional EV usage (kW) e.g. 7.1" step="any" min="0">
@@ -398,6 +401,14 @@
   </div>
 
   <div id="usageTab" style="display:none;">
+    <div class="toggleWrap" style="margin-bottom:8px;">
+      <span>Usage: <b id="usageViewLabel">Weekly</b></span>
+      <label class="switch">
+        <input type="checkbox" id="usageViewToggle">
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div id="usageWeeklyWrap">
     <div class="usageWeekNav">
       <button type="button" class="usageNavBtn" onclick="usagePrevWeek()">&#9664;</button>
       <span id="usageDateRange" class="usageDateRange"></span>
@@ -420,6 +431,19 @@
       <option value="cost">Cost</option>
     </select>
     <canvas id="usageChart" height="220"></canvas>
+    </div>
+    <div id="usageDailyWrap" style="display:none;">
+      <div class="usageWeekNav">
+        <button type="button" class="usageNavBtn" onclick="usagePrevDay()">&#9664;</button>
+        <span id="usageDailyDate" class="usageDateRange"></span>
+        <button type="button" class="usageNavBtn" onclick="usageNextDay()">&#9654;</button>
+      </div>
+      <table>
+        <thead><tr><th>Hour</th><th>kWh</th><th>Cost</th></tr></thead>
+        <tbody id="usageHourBody"></tbody>
+      </table>
+      <canvas id="usageDailyChart" height="220"></canvas>
+    </div>
   </div>
 
 </div>
@@ -504,6 +528,14 @@
       <input id="compareShoulderRate" type="number" step="0.0001" min="0">
     </div>
 
+    <span class="label" style="margin-top:14px;">Before Amp2$ (previous usage)</span>
+    <div class="row2">
+      <input id="previousUsageKwh" type="number" step="any" min="0" placeholder="kWh">
+      <select id="previousUsageType">
+        <option value="monthly">per month</option>
+        <option value="quarterly">per quarter</option>
+      </select>
+    </div>
     <div class="spacer"></div>
 
     <div class="controls">
@@ -564,8 +596,10 @@
 <div class="modalOverlay" id="editOverlay" onclick="editOverlayClick(event)">
   <div class="modal" role="dialog" aria-modal="true">
     <h3>Edit Reading</h3>
-    <span class="label" style="margin-top:0;">Amps</span>
-    <input id="editAmps" type="number" step="any" min="0">
+    <div class="row2" style="gap:8px;">
+      <div><span class="label" style="margin-top:0;">Amps</span><input id="editAmps" type="number" step="any" min="0"></div>
+      <div><span class="label" style="margin-top:0;">or kW</span><input id="editKw" type="number" step="any" min="0"></div>
+    </div>
 
     <span class="label">EV usage (kW)</span>
     <input id="editEv" type="number" step="any" min="0">
@@ -618,7 +652,9 @@
     comparePeakStart:"16:00",
     comparePeakEnd:"21:00",
     comparePeakRate:0.50,
-    compareShoulderRate:0.25
+    compareShoulderRate:0.25,
+    previousUsageKwh: null,
+    previousUsageType: "monthly"
   }));
 
   let page = 0;
@@ -632,6 +668,8 @@
   let usageGraphMode = "kw";
   let selectedUsageDayIndex = null;
   let usageDayDataCache = [];
+  let usageViewMode = "weekly";
+  let usageDayOffset = 0;
 
   function getLocalDateKey(d){
     const y = d.getFullYear();
@@ -959,6 +997,79 @@
     return history.filter(x => getTariff(new Date(x.time)) === r.tariff && new Date(x.time).getTime() <= t0);
   }
 
+  // ===== Smart time-weighted usage (reduces distortion from short high-power spikes) =====
+  function getSmartKwhForReadings(readings, periodEnd){
+    if(!readings.length) return 0;
+    const sorted = readings.slice().sort((a,b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+    const endMs = periodEnd instanceof Date ? periodEnd.getTime() : new Date(periodEnd).getTime();
+    let kwh = 0;
+    for(let i = 0; i < sorted.length; i++){
+      const t = new Date(sorted[i].time).getTime();
+      const nextT = i < sorted.length - 1 ? new Date(sorted[i+1].time).getTime() : endMs;
+      const durationHr = Math.max(0, (Math.min(nextT, endMs) - t)) / 3600000;
+      kwh += adjustedKW(sorted[i]) * durationHr;
+    }
+    return kwh;
+  }
+  function getSmartCostForReadings(readings, periodEnd){
+    if(!readings.length) return 0;
+    const sorted = readings.slice().sort((a,b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+    const endMs = periodEnd instanceof Date ? periodEnd.getTime() : new Date(periodEnd).getTime();
+    let cost = 0;
+    for(let i = 0; i < sorted.length; i++){
+      const t = new Date(sorted[i].time).getTime();
+      const nextT = i < sorted.length - 1 ? new Date(sorted[i+1].time).getTime() : endMs;
+      const durationHr = Math.max(0, (Math.min(nextT, endMs) - t)) / 3600000;
+      cost += adjustedCostPerHour(sorted[i]) * durationHr;
+    }
+    return cost;
+  }
+  function getSmartAmpHoursForReadings(readings, periodEnd){
+    if(!readings.length) return 0;
+    const sorted = readings.slice().sort((a,b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+    const endMs = periodEnd instanceof Date ? periodEnd.getTime() : new Date(periodEnd).getTime();
+    let ah = 0;
+    for(let i = 0; i < sorted.length; i++){
+      const t = new Date(sorted[i].time).getTime();
+      const nextT = i < sorted.length - 1 ? new Date(sorted[i+1].time).getTime() : endMs;
+      const durationHr = Math.max(0, (Math.min(nextT, endMs) - t)) / 3600000;
+      ah += Number(sorted[i].amps || 0) * durationHr;
+    }
+    return ah;
+  }
+  function getSmartCostForReadingsWithRate(readings, periodEnd, rateFn){
+    if(!readings.length) return 0;
+    const sorted = readings.slice().sort((a,b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+    const endMs = periodEnd instanceof Date ? periodEnd.getTime() : new Date(periodEnd).getTime();
+    let cost = 0;
+    for(let i = 0; i < sorted.length; i++){
+      const t = new Date(sorted[i].time).getTime();
+      const nextT = i < sorted.length - 1 ? new Date(sorted[i+1].time).getTime() : endMs;
+      const durationHr = Math.max(0, (Math.min(nextT, endMs) - t)) / 3600000;
+      cost += adjustedKW(sorted[i]) * (rateFn ? rateFn(sorted[i]) : Number(sorted[i].rate || 0)) * durationHr;
+    }
+    return cost;
+  }
+  function getSmartCompareCostForReadings(readings, periodEnd){
+    return getSmartCostForReadingsWithRate(readings, periodEnd, r => getCompareRate(new Date(r.time)));
+  }
+  function getSmartEvCostForReadings(readings, periodEnd){
+    if(!readings.length) return 0;
+    const sorted = readings.slice().sort((a,b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+    const endMs = periodEnd instanceof Date ? periodEnd.getTime() : new Date(periodEnd).getTime();
+    let cost = 0;
+    for(let i = 0; i < sorted.length; i++){
+      const r = sorted[i];
+      const evKw = Number(r.ev || 0);
+      if(evKw <= 0) continue;
+      const t = new Date(r.time).getTime();
+      const nextT = i < sorted.length - 1 ? new Date(sorted[i+1].time).getTime() : endMs;
+      const durationHr = Math.max(0, (Math.min(nextT, endMs) - t)) / 3600000;
+      cost += evKw * Number(r.rate || 0) * durationHr;
+    }
+    return cost;
+  }
+
   // ===== EV adjusters =====
   function adjustedKW(r){
     const base = Number(r.kw || 0);
@@ -1010,16 +1121,26 @@
   // ===== Calculate =====
   function calculate(){
     const ampsInput = document.getElementById("amps");
+    const kwInput = document.getElementById("kwIn");
     const evInput = document.getElementById("evkw");
     const evFromInput = document.getElementById("evFrom");
     const evToInput = document.getElementById("evTo");
 
-    const amps = parseFloat(ampsInput.value);
-    if(!(amps || amps === 0)) return;
+    const ampsVal = ampsInput.value.trim();
+    const kwVal = kwInput && kwInput.value.trim();
+    const amps = parseFloat(ampsVal);
+    const kwFromInput = kwVal !== "" && !Number.isNaN(parseFloat(kwVal)) ? parseFloat(kwVal) : null;
+
+    let ampsNum, kw;
+    if(ampsVal !== "" && !Number.isNaN(amps) && (amps >= 0 || amps === 0)){
+      ampsNum = amps;
+      kw = (ampsNum * Number(settings.voltage || 230)) / 1000;
+    } else if(kwFromInput != null && kwFromInput >= 0){
+      kw = kwFromInput;
+      ampsNum = (kw * 1000) / Number(settings.voltage || 230);
+    } else return;
 
     const ev = parseFloat(evInput.value) || 0;
-
-    const kw = (amps * Number(settings.voltage || 230)) / 1000;
 
     const now = new Date();
     const rate = getRate(now);
@@ -1028,7 +1149,7 @@
     const notesInput = document.getElementById("notesInput");
     const entry = {
       time: now.toISOString(),
-      amps: amps,
+      amps: ampsNum,
       kw: kw,
       ev: ev,
       evFrom: evFromInput.value || "",
@@ -1046,6 +1167,7 @@
 
     // Clear inputs after successful add
     ampsInput.value = "";
+    if(kwInput) kwInput.value = "";
     evInput.value = "";
     evFromInput.value = "";
     evToInput.value = "";
@@ -1176,7 +1298,7 @@
       EV charge at your rate: ${evCostShow}<br>
       EV charge at comparison rate: ${compareEvShow}<br>
       ${evMode ? "" : evDiffShow + "<br>"}<br>
-
+      ${(settings.previousUsageKwh != null && settings.previousUsageKwh > 0) ? "<b>Before Amp2$</b><br>" + settings.previousUsageKwh.toFixed(0) + " kWh/" + (settings.previousUsageType || "monthly") + " → ~$" + ((settings.previousUsageType === "quarterly" ? settings.previousUsageKwh/3 : settings.previousUsageKwh) * (settings.compareTariffType === "fixed" ? Number(settings.compareFixedRate||0) : 0.25)).toFixed(2) + "/month at comparison rate<br><br>" : ""}
       Notes: ${(r.notes || "-").replace(/</g,"&lt;")}<br><br>
 
       <div class="detailsActions">
@@ -1198,95 +1320,51 @@
       return;
     }
 
+    const now = new Date();
+    let periodEnd, periodDays;
+    if(monthFilter != null && monthFilter !== undefined){
+      const year = now.getFullYear();
+      periodEnd = new Date(year, monthFilter + 1, 0, 23, 59, 59, 999);
+      periodDays = new Date(year, monthFilter + 1, 0).getDate();
+    } else {
+      if(!rows.length){ periodEnd = new Date(); periodDays = 30; }
+      else {
+        const sorted = rows.slice().sort((a,b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+        periodEnd = getDayPeriodEnd(new Date(sorted[sorted.length-1].time));
+        const firstDay = getLocalDateKey(new Date(sorted[0].time));
+        const lastDay = getLocalDateKey(new Date(sorted[sorted.length-1].time));
+        periodDays = Math.max(1, Math.ceil((new Date(lastDay) - new Date(firstDay)) / 86400000) + 1);
+      }
+    }
+
+    const smartKwh = getSmartKwhForReadings(rows, periodEnd);
+    const smartCost = getSmartCostForReadings(rows, periodEnd);
+    const smartCompareCost = getSmartCompareCostForReadings(rows, periodEnd);
+    const smartAmpHrs = getSmartAmpHoursForReadings(rows, periodEnd);
+
+    const daily = periodDays > 0 ? smartCost / periodDays : 0;
+    const monthly = smartCost;
+    const totalAvg = periodDays > 0 && periodDays * 24 > 0 ? smartCost / (periodDays * 24) : 0;
+
     let off = 0, peak = 0, shoulder = 0, fixed = 0;
     let countOff = 0, countPeak = 0, countShoulder = 0, countFixed = 0;
-    let sumDaily = 0;
-    let sumMonthly = 0;
-    let sumAmpsOff = 0, sumAmpsPeak = 0, sumAmpsShoulder = 0, sumAmpsFixed = 0;
-    let sumKwOff = 0, sumKwPeak = 0, sumKwShoulder = 0, sumKwFixed = 0;
-    let totalEvKwh = 0;
-    let totalEvCostDollars = 0;
-    let evReadingsCount = 0;
-    const dur = getTariffDurations();
-
-    let sumCompareDaily = 0;
-    let sumCompareMonthly = 0;
-
     rows.forEach(r=>{
       const cost = adjustedCostPerHour(r);
-      const blended = computeDailyMonthlyForReading(r);
-      sumDaily += blended.daily;
-      sumMonthly += blended.monthly;
-      const compareBlended = computeDailyMonthlyAtCompareTariffForReading(r);
-      sumCompareDaily += compareBlended.daily;
-      sumCompareMonthly += compareBlended.monthly;
-      const amps = Number(r.amps || 0);
-      const kw = Number(r.kw || 0);
-      const evKw = Number(r.ev || 0);
-      const chargeHrs = (() => {
-        const evFrom = r.evFrom || "";
-        const evTo = r.evTo || "";
-        const dh = diffHours(evFrom, evTo);
-        if(dh !== null) return dh;
-        return r.tariff === "OffPeak" ? dur.offHours : r.tariff === "Peak" ? dur.peakHours : dur.shoulderHours;
-      })();
-      if(evKw > 0 && !evMode){
-        totalEvKwh += evKw * chargeHrs;
-        totalEvCostDollars += computeEvCostForReading(r);
-        evReadingsCount++;
-      }
-
-      if(settings.tariffType === "fixed"){
-        fixed += cost;
-        countFixed++;
-        sumAmpsFixed += amps;
-        sumKwFixed += kw;
-      } else {
-        if(r.tariff === "OffPeak"){
-          off += cost;
-          countOff++;
-          sumAmpsOff += amps;
-          sumKwOff += kw;
-        } else if(r.tariff === "Peak"){
-          peak += cost;
-          countPeak++;
-          sumAmpsPeak += amps;
-          sumKwPeak += kw;
-        } else {
-          shoulder += cost;
-          countShoulder++;
-          sumAmpsShoulder += amps;
-          sumKwShoulder += kw;
-        }
-      }
+      if(settings.tariffType === "fixed"){ fixed += cost; countFixed++; }
+      else if(r.tariff === "OffPeak"){ off += cost; countOff++; }
+      else if(r.tariff === "Peak"){ peak += cost; countPeak++; }
+      else { shoulder += cost; countShoulder++; }
     });
+    let avgOff = countOff ? off/countOff : 0, avgPeak = countPeak ? peak/countPeak : 0;
+    let avgShoulder = countShoulder ? shoulder/countShoulder : 0, avgFixed = countFixed ? fixed/countFixed : 0;
 
-    let avgOff = countOff ? off/countOff : 0;
-    let avgPeak = countPeak ? peak/countPeak : 0;
-    let avgShoulder = countShoulder ? shoulder/countShoulder : 0;
-    let avgFixed = countFixed ? fixed/countFixed : 0;
+    const totalEvKwh = 0;
+    const totalEvCostDollars = 0;
+    const evReadingsCount = 0;
+    const totalEvCost = getMergedEvSessionsCost(rows);
 
-    const daily = sumDaily / rows.length;
-    const monthly = sumMonthly / rows.length;
-    const totalAvg = daily / 24;
-
-    const avgAmpsOff = countOff ? sumAmpsOff / countOff : 0;
-    const avgAmpsPeak = countPeak ? sumAmpsPeak / countPeak : 0;
-    const avgAmpsShoulder = countShoulder ? sumAmpsShoulder / countShoulder : 0;
-    const avgAmpsFixed = countFixed ? sumAmpsFixed / countFixed : 0;
-    const avgKwOff = countOff ? sumKwOff / countOff : 0;
-    const avgKwPeak = countPeak ? sumKwPeak / countPeak : 0;
-    const avgKwShoulder = countShoulder ? sumKwShoulder / countShoulder : 0;
-    const avgKwFixed = countFixed ? sumKwFixed / countFixed : 0;
-
-    const monthlyAmpsEst = settings.tariffType === "fixed"
-      ? avgAmpsFixed * 24 * 30
-      : (avgAmpsOff * dur.offHours + avgAmpsPeak * dur.peakHours + avgAmpsShoulder * dur.shoulderHours) * 30;
-    const monthlyKwEst = settings.tariffType === "fixed"
-      ? avgKwFixed * 24 * 30
-      : (avgKwOff * dur.offHours + avgKwPeak * dur.peakHours + avgKwShoulder * dur.shoulderHours) * 30;
-
-    const totalEvCost = totalEvCostDollars;
+    const monthlyAmpsEst = periodDays > 0 ? (smartAmpHrs / periodDays) * 30 : 0;
+    const monthlyKwEst = periodDays > 0 ? (smartKwh / periodDays) * 30 : 0;
 
     let tariffHTML = "";
     if(settings.tariffType === "fixed"){
@@ -1299,8 +1377,10 @@
       `;
     }
 
+    const prevUsageHtml = getPreviousUsageHtml(monthlyKwEst, smartCost, smartCompareCost, periodDays);
+
     document.getElementById("details").innerHTML = `
-      <b>Total Averages (${evMode ? "-EV" : "All"})</b><br><br>
+      <b>Total Averages (${evMode ? "-EV" : "All"}) – smart time-weighted</b><br><br>
 
       Readings used: ${rows.length}<br><br>
 
@@ -1313,18 +1393,63 @@
       Daily Estimate: $${daily.toFixed(2)}<br>
       Monthly Estimate: $${monthly.toFixed(0)}<br><br>
 
-      <b>Totals (monthly estimates from period averages)</b><br>
-      Total Amps (monthly est. amp-hr): ${monthlyAmpsEst.toFixed(0)}<br>
-      Total kW (monthly est. kWh): ${monthlyKwEst.toFixed(1)}<br><br>
+      <b>Totals (smart: time-weighted kWh & cost)</b><br>
+      Total Amps (amp-hr in period): ${smartAmpHrs.toFixed(0)}<br>
+      Total kWh (in period): ${smartKwh.toFixed(1)}<br>
+      Monthly est. kWh: ${monthlyKwEst.toFixed(1)}<br><br>
 
       <b>Total EV</b><br>
-      Total EV usage (from ${evReadingsCount} readings with EV): ${totalEvKwh.toFixed(1)} kWh in period<br>
-      Total EV cost (readings at their tariff period rates): ${evMode ? "-" : "$" + totalEvCost.toFixed(2)}<br><br>
+      ${evMode ? "–" : "Merged sessions cost: $" + totalEvCost.toFixed(2)}<br><br>
 
       <b>Comparison (vs comparison tariff)</b><br>
-      Daily would be: $${(sumCompareDaily/rows.length).toFixed(2)} &nbsp; Savings: $${(daily - sumCompareDaily/rows.length).toFixed(2)}<br>
-      Monthly would be: $${(sumCompareMonthly/rows.length).toFixed(0)} &nbsp; Savings: $${(monthly - sumCompareMonthly/rows.length).toFixed(0)}
+      Same usage at comparison rate: $${smartCompareCost.toFixed(2)} &nbsp; Savings: $${(smartCost - smartCompareCost).toFixed(2)}<br><br>
+      ${prevUsageHtml}
     `;
+  }
+
+  function getPreviousUsageHtml(currentMonthlyKwh, currentCost, compareCost, periodDays){
+    const prev = settings.previousUsageKwh;
+    const prevType = settings.previousUsageType || "monthly";
+    if(prev == null || prev <= 0) return "";
+    const compareRate = settings.compareTariffType === "fixed" ? Number(settings.compareFixedRate || 0) : 0.25;
+    const prevKwhPerMonth = prevType === "quarterly" ? prev / 3 : prev;
+    const prevCostPerMonth = prevKwhPerMonth * compareRate;
+    const currentCostPerMonth = periodDays > 0 ? (currentCost / periodDays) * 30 : 0;
+    return `<b>Before Amp2$ (${prevType})</b><br>Previous: ${prev.toFixed(0)} kWh/${prevType} → ~$${prevCostPerMonth.toFixed(0)}/month at comparison rate<br>Current (smart): ${currentMonthlyKwh.toFixed(0)} kWh/month est. → $${currentCostPerMonth.toFixed(0)}/month<br><br>`;
+  }
+
+  function getMergedEvSessionsCost(rows){
+    const sessions = getMergedEvSessions(rows);
+    let total = 0;
+    sessions.forEach(s => { total += s.cost; });
+    return total;
+  }
+  function getMergedEvSessions(rows){
+    const byDate = {};
+    rows.forEach(r => {
+      if(!r.ev || Number(r.ev) <= 0) return;
+      const key = getLocalDateKey(new Date(r.time));
+      if(!byDate[key]) byDate[key] = [];
+      byDate[key].push(r);
+    });
+    const sessions = [];
+    Object.keys(byDate).forEach(dateStr => {
+      const list = byDate[dateStr];
+      const withWindow = list.filter(r => (r.evFrom || "").trim() && (r.evTo || "").trim());
+      if(withWindow.length === 0){ list.forEach(r => { sessions.push({ readings: [r], cost: computeEvCostForReading(r) }); }); return; }
+      const s = parseTimeToMinutes(withWindow[0].evFrom);
+      const e = parseTimeToMinutes(withWindow[0].evTo);
+      const sameWindow = list.filter(r => {
+        const rs = parseTimeToMinutes(r.evFrom || "");
+        const re = parseTimeToMinutes(r.evTo || "");
+        if(rs === null || re === null) return false;
+        return Math.abs(rs - s) < 30 && Math.abs(re - e) < 30;
+      });
+      const periodEnd = new Date(dateStr + "T23:59:59.999");
+      const cost = getSmartEvCostForReadings(sameWindow, periodEnd);
+      sessions.push({ readings: sameWindow, cost });
+    });
+    return sessions;
   }
 
   // ===== Averages tab =====
@@ -1498,46 +1623,59 @@
     return names[dayIdx];
   }
 
+  function getDayPeriodEnd(date){
+    const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
+    return new Date(y, m, d, 23, 59, 59, 999);
+  }
+  function getDayPeriodEndForTariff(date, tariff){
+    const y = date.getFullYear(), m = date.getMonth(), day = date.getDate();
+    if(settings.tariffType === "fixed") return new Date(y, m, day, 23, 59, 59, 999);
+    if(tariff === "OffPeak"){ const [hh,mm] = (settings.offEnd || "16:00").split(":"); return new Date(y, m, day, parseInt(hh,10), parseInt(mm,10), 0, 0); }
+    if(tariff === "Peak"){ const [hh,mm] = (settings.peakEnd || "21:00").split(":"); return new Date(y, m, day, parseInt(hh,10), parseInt(mm,10), 0, 0); }
+    return new Date(y, m, day, 23, 59, 59, 999);
+  }
+
   function computeUsageDayData(date){
     const dateStr = getLocalDateKey(date);
     const dayReadings = history.filter(r => getLocalDateKey(new Date(r.time)) === dateStr);
-    const off = { kw: [], cost: [] };
-    const peak = { kw: [], cost: [] };
-    const shoulder = { kw: [], cost: [] };
-    dayReadings.forEach(r => {
-      const kw = adjustedKW(r);
-      const costHr = adjustedCostPerHour(r);
-      const arr = r.tariff === "OffPeak" ? off : r.tariff === "Peak" ? peak : shoulder;
-      arr.kw.push(kw);
-      arr.cost.push(costHr);
-    });
+    const dayEnd = getDayPeriodEnd(date);
     const dur = getTariffDurations();
-    const avg = (arr) => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0;
-    const offKw = avg(off.kw);
-    const peakKw = avg(peak.kw);
-    const shoulderKw = avg(shoulder.kw);
-    const offCostHr = avg(off.cost);
-    const peakCostHr = avg(peak.cost);
-    const shoulderCostHr = avg(shoulder.cost);
-    const offCost = offCostHr * dur.offHours;
-    const peakCost = peakCostHr * dur.peakHours;
-    const shoulderCost = shoulderCostHr * dur.shoulderHours;
-    const totalKw = offKw * dur.offHours + peakKw * dur.peakHours + shoulderKw * dur.shoulderHours;
-    const totalCost = offCost + peakCost + shoulderCost;
+
     if(settings.tariffType === "fixed"){
-      const fixKw = dayReadings.length ? dayReadings.reduce((a,r)=>a+adjustedKW(r),0)/dayReadings.length : 0;
-      const fixCostHr = dayReadings.length ? dayReadings.reduce((a,r)=>a+adjustedCostPerHour(r),0)/dayReadings.length : 0;
+      const totalKw = getSmartKwhForReadings(dayReadings, dayEnd);
+      const totalCost = getSmartCostForReadings(dayReadings, dayEnd);
+      const fixKw = dur.shoulderHours > 0 ? totalKw / 24 : 0;
       return {
         date, dateStr, dayReadings,
         offKw: 0, peakKw: 0, shoulderKw: fixKw,
-        offCost: 0, peakCost: 0, shoulderCost: fixCostHr * 24,
-        totalKw: fixKw * 24, totalCost: fixCostHr * 24,
+        offCost: 0, peakCost: 0, shoulderCost: totalCost,
+        totalKw, totalCost,
         isFixed: true
       };
     }
+
+    const offReadings = dayReadings.filter(r => r.tariff === "OffPeak");
+    const peakReadings = dayReadings.filter(r => r.tariff === "Peak");
+    const shoulderReadings = dayReadings.filter(r => r.tariff !== "OffPeak" && r.tariff !== "Peak");
+    const offEnd = getDayPeriodEndForTariff(date, "OffPeak");
+    const peakEnd = getDayPeriodEndForTariff(date, "Peak");
+    const shoulderEnd = dayEnd;
+
+    const offKwh = getSmartKwhForReadings(offReadings, offEnd);
+    const peakKwh = getSmartKwhForReadings(peakReadings, peakEnd);
+    const shoulderKwh = getSmartKwhForReadings(shoulderReadings, shoulderEnd);
+    const offCost = getSmartCostForReadings(offReadings, offEnd);
+    const peakCost = getSmartCostForReadings(peakReadings, peakEnd);
+    const shoulderCost = getSmartCostForReadings(shoulderReadings, shoulderEnd);
+    const totalKw = offKwh + peakKwh + shoulderKwh;
+    const totalCost = offCost + peakCost + shoulderCost;
+    const offKw = dur.offHours > 0 ? offKwh / dur.offHours : 0;
+    const peakKw = dur.peakHours > 0 ? peakKwh / dur.peakHours : 0;
+    const shoulderKw = dur.shoulderHours > 0 ? shoulderKwh / dur.shoulderHours : 0;
     return {
       date, dateStr, dayReadings,
       offKw, peakKw, shoulderKw,
+      offKwh, peakKwh, shoulderKwh,
       offCost, peakCost, shoulderCost,
       totalKw, totalCost,
       isFixed: false
@@ -1545,6 +1683,29 @@
   }
 
   function renderUsage(){
+    const weeklyWrap = document.getElementById("usageWeeklyWrap");
+    const dailyWrap = document.getElementById("usageDailyWrap");
+    if(usageViewMode === "daily"){
+      if(weeklyWrap) weeklyWrap.style.display = "none";
+      if(dailyWrap) dailyWrap.style.display = "block";
+      const dayDate = getUsageDayForDaily();
+      document.getElementById("usageDailyDate").textContent = dayDate.toLocaleDateString("en-AU",{weekday:"short",day:"numeric",month:"short",year:"2-digit"});
+      const { hours, costHours } = getUsageHourData(dayDate);
+      const hourBody = document.getElementById("usageHourBody");
+      if(hourBody){
+        hourBody.innerHTML = "";
+        for(let h = 0; h < 24; h++){
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td>${h}:00</td><td>${hours[h].toFixed(3)}</td><td>$${costHours[h].toFixed(2)}</td>`;
+          hourBody.appendChild(tr);
+        }
+      }
+      drawUsageDailyChart(hours, costHours);
+      document.getElementById("details").innerHTML = "Daily view: usage by hour for " + dayDate.toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"}) + ".";
+      return;
+    }
+    if(weeklyWrap) weeklyWrap.style.display = "block";
+    if(dailyWrap) dailyWrap.style.display = "none";
     const days = getUsageDays();
     const todayStr = getLocalDateKey(new Date());
     usageDayDataCache = days.map(d => computeUsageDayData(d));
@@ -1605,6 +1766,78 @@
     renderUsage();
   }
 
+  function getUsageDayForDaily(){
+    const days = getUsageDays();
+    const todayStr = getLocalDateKey(new Date());
+    let idx = selectedUsageDayIndex;
+    if(idx == null || idx < 0 || idx >= 7) idx = days.findIndex(d => getLocalDateKey(d) === todayStr);
+    if(idx < 0) idx = 0;
+    const base = days[idx];
+    const d = new Date(base);
+    d.setDate(d.getDate() + usageDayOffset);
+    return d;
+  }
+  function getUsageHourData(date){
+    const dateStr = getLocalDateKey(date);
+    const dayReadings = history.filter(r => getLocalDateKey(new Date(r.time)) === dateStr);
+    const hours = Array(24).fill(0);
+    const costHours = Array(24).fill(0);
+    const y = date.getFullYear(), m = date.getMonth(), day = date.getDate();
+    for(let h = 0; h < 24; h++){
+      const hourStart = new Date(y, m, day, h, 0, 0, 0);
+      const hourEnd = new Date(y, m, day, h, 59, 59, 999);
+      const inHour = dayReadings.filter(r => {
+        const t = new Date(r.time).getTime();
+        return t >= hourStart.getTime() && t <= hourEnd.getTime();
+      });
+      hours[h] = getSmartKwhForReadings(inHour, hourEnd);
+      costHours[h] = getSmartCostForReadings(inHour, hourEnd);
+    }
+    return { hours, costHours };
+  }
+  function usagePrevDay(){
+    usageDayOffset--;
+    if(usageViewMode === "daily") renderUsage();
+  }
+  function usageNextDay(){
+    usageDayOffset++;
+    if(usageViewMode === "daily") renderUsage();
+  }
+
+  function drawUsageDailyChart(hours, costHours){
+    const canvas = document.getElementById("usageDailyChart");
+    if(!canvas || !hours) return;
+    const ctx = canvas.getContext("2d");
+    const cssWidth = canvas.getBoundingClientRect().width || 320;
+    const cssHeight = 220;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.style.height = cssHeight + "px";
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,cssWidth,cssHeight);
+    const isCost = usageGraphMode === "cost";
+    const data = isCost ? costHours : hours;
+    const maxVal = Math.max(...data, 1);
+    const topPad = 12, bottomPad = 28, leftPad = 28, rightPad = 8;
+    const chartW = cssWidth - leftPad - rightPad;
+    const chartH = cssHeight - topPad - bottomPad;
+    const barW = chartW / 24;
+    ctx.fillStyle = "#aaa";
+    ctx.font = "10px Arial";
+    ctx.fillText((isCost ? "$" : "") + maxVal.toFixed(0), 2, topPad + 8);
+    ctx.fillText("0", 2, topPad + chartH + 4);
+    data.forEach((v, i) => {
+      const h = maxVal > 0 ? (v / maxVal) * chartH : 0;
+      ctx.fillStyle = "#4cafef";
+      ctx.fillRect(leftPad + i * barW + 2, topPad + chartH - h, Math.max(2, barW - 4), h);
+      if(i % 4 === 0){
+        ctx.fillStyle = "#fff";
+        ctx.fillText(String(i), leftPad + i * barW + barW/2 - 4, topPad + chartH + 14);
+      }
+    });
+  }
+
   function drawUsageChart(){
     const canvas = document.getElementById("usageChart");
     if(!canvas) return;
@@ -1655,9 +1888,9 @@
         ctx.fillRect(x0, topPad + chartH - h, segmentW * 3, h);
       } else {
         const segs = [
-          { v: isCost ? dayData.offCost : dayData.offKw, c: colors.off },
-          { v: isCost ? dayData.peakCost : dayData.peakKw, c: colors.peak },
-          { v: isCost ? dayData.shoulderCost : dayData.shoulderKw, c: colors.shoulder }
+          { v: isCost ? dayData.offCost : (dayData.offKwh != null ? dayData.offKwh : dayData.offKw), c: colors.off },
+          { v: isCost ? dayData.peakCost : (dayData.peakKwh != null ? dayData.peakKwh : dayData.peakKw), c: colors.peak },
+          { v: isCost ? dayData.shoulderCost : (dayData.shoulderKwh != null ? dayData.shoulderKwh : dayData.shoulderKw), c: colors.shoulder }
         ];
         let y = topPad + chartH;
         segs.forEach(seg => {
@@ -1691,9 +1924,9 @@
             { label: "Fixed", value: isCost ? d.totalCost : d.totalKw, color: "#4cafef" }
           ]
         : [
-            { label: "Off", value: isCost ? d.offCost : d.offKw, color: colors.off },
-            { label: "Peak", value: isCost ? d.peakCost : d.peakKw, color: colors.peak },
-            { label: "Should", value: isCost ? d.shoulderCost : d.shoulderKw, color: colors.shoulder }
+            { label: "Off", value: isCost ? d.offCost : (d.offKwh != null ? d.offKwh : d.offKw), color: colors.off },
+            { label: "Peak", value: isCost ? d.peakCost : (d.peakKwh != null ? d.peakKwh : d.peakKw), color: colors.peak },
+            { label: "Should", value: isCost ? d.shoulderCost : (d.shoulderKwh != null ? d.shoulderKwh : d.shoulderKw), color: colors.shoulder }
           ];
 
       entries.forEach((e, idx) => {
@@ -1801,6 +2034,9 @@
     document.getElementById("comparePeakRate").value = settings.comparePeakRate ?? 0.50;
     document.getElementById("compareShoulderRate").value = settings.compareShoulderRate ?? 0.25;
 
+    document.getElementById("previousUsageKwh").value = settings.previousUsageKwh != null ? settings.previousUsageKwh : "";
+    document.getElementById("previousUsageType").value = settings.previousUsageType || "monthly";
+
     toggleTariffSettingsUI();
     toggleCompareTariffSettingsUI();
 
@@ -1856,6 +2092,10 @@
     settings.comparePeakRate = parseFloat(document.getElementById("comparePeakRate").value) ?? settings.comparePeakRate;
     settings.compareShoulderRate = parseFloat(document.getElementById("compareShoulderRate").value) ?? settings.compareShoulderRate;
 
+    const prevKwh = document.getElementById("previousUsageKwh").value.trim();
+    settings.previousUsageKwh = prevKwh !== "" && !Number.isNaN(parseFloat(prevKwh)) ? parseFloat(prevKwh) : null;
+    settings.previousUsageType = document.getElementById("previousUsageType").value || "monthly";
+
     localStorage.setItem("settings", JSON.stringify(settings));
 
     closeSettings();
@@ -1882,7 +2122,14 @@
   document.getElementById("exportRange").addEventListener("change", updateExportModalUI);
   document.getElementById("exportTotalsRange").addEventListener("change", updateExportModalUI);
   const usageGraphModeEl = document.getElementById("usageGraphMode");
-  if(usageGraphModeEl) usageGraphModeEl.addEventListener("change", function(){ usageGraphMode = this.value; drawUsageChart(); });
+  if(usageGraphModeEl) usageGraphModeEl.addEventListener("change", function(){ usageGraphMode = this.value; drawUsageChart(); if(usageViewMode === "daily") renderUsage(); });
+  const usageViewToggleEl = document.getElementById("usageViewToggle");
+  if(usageViewToggleEl) usageViewToggleEl.addEventListener("change", function(){
+    usageViewMode = this.checked ? "daily" : "weekly";
+    document.getElementById("usageViewLabel").textContent = usageViewMode === "daily" ? "Daily" : "Weekly";
+    usageDayOffset = 0;
+    renderUsage();
+  });
   function closeExportModal(){
     document.getElementById("exportOverlay").style.display = "none";
   }
@@ -1893,6 +2140,8 @@
     const idx = Math.min(Math.max(selectedIndex, 0), history.length - 1);
     const r = history[idx];
     document.getElementById("editAmps").value = r.amps ?? "";
+    const editKw = document.getElementById("editKw");
+    if(editKw) editKw.value = r.kw != null ? r.kw : "";
     document.getElementById("editEv").value = r.ev ?? "";
     document.getElementById("editEvFrom").value = r.evFrom || "";
     document.getElementById("editEvTo").value = r.evTo || "";
@@ -1918,17 +2167,28 @@
     const idx = Math.min(Math.max(selectedIndex, 0), history.length - 1);
     const r = history[idx];
 
-    const ampsVal = parseFloat(document.getElementById("editAmps").value);
-    if(Number.isNaN(ampsVal)){
-      alert("Please enter a valid Amps value.");
+    const ampsStr = document.getElementById("editAmps").value.trim();
+    const kwStr = document.getElementById("editKw") ? document.getElementById("editKw").value.trim() : "";
+    const ampsVal = ampsStr !== "" && !Number.isNaN(parseFloat(ampsStr)) ? parseFloat(ampsStr) : null;
+    const kwVal = kwStr !== "" && !Number.isNaN(parseFloat(kwStr)) ? parseFloat(kwStr) : null;
+
+    let ampsNum, kwNum;
+    if(ampsVal != null && ampsVal >= 0){
+      ampsNum = ampsVal;
+      kwNum = (ampsNum * Number(settings.voltage || 230)) / 1000;
+    } else if(kwVal != null && kwVal >= 0){
+      kwNum = kwVal;
+      ampsNum = (kwNum * 1000) / Number(settings.voltage || 230);
+    } else {
+      alert("Please enter either Amps or kW.");
       return;
     }
     const evVal = parseFloat(document.getElementById("editEv").value) || 0;
     const fromVal = document.getElementById("editEvFrom").value || "";
     const toVal = document.getElementById("editEvTo").value || "";
 
-    r.amps = ampsVal;
-    r.kw = (ampsVal * Number(settings.voltage || 230)) / 1000;
+    r.amps = ampsNum;
+    r.kw = kwNum;
     r.ev = evVal;
     r.evFrom = fromVal;
     r.evTo = toVal;
@@ -2070,26 +2330,26 @@
     }
 
     if(!isHistory){
-      const sumDaily = filtered.reduce((a,r)=>a+computeDailyMonthlyForReading(r).daily,0);
-      const sumMonthly = filtered.reduce((a,r)=>a+computeDailyMonthlyForReading(r).monthly,0);
-      const sumCompareDaily = filtered.reduce((a,r)=>a+computeDailyMonthlyAtCompareTariffForReading(r).daily,0);
-      const sumCompareMonthly = filtered.reduce((a,r)=>a+computeDailyMonthlyAtCompareTariffForReading(r).monthly,0);
-      let sumEvCost = 0, sumEvChargeHours = 0;
-      if(!evMode){
-        filtered.forEach(r=>{
-          const evCostR = computeEvCostForReading(r);
-          if(evCostR > 0){
-            sumEvCost += evCostR;
-            const dh = diffHours(r.evFrom||"", r.evTo||"");
-            sumEvChargeHours += dh !== null ? dh : 5;
-          }
-        });
-      }
+      const sorted = filtered.slice().sort((a,b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+      const periodEnd = sorted.length ? getDayPeriodEnd(new Date(sorted[sorted.length-1].time)) : new Date();
+      const smartKwh = getSmartKwhForReadings(filtered, periodEnd);
+      const smartCost = getSmartCostForReadings(filtered, periodEnd);
+      const smartCompareCost = getSmartCompareCostForReadings(filtered, periodEnd);
+      const periodDays = sorted.length ? Math.max(1, Math.ceil((new Date(sorted[sorted.length-1].time) - new Date(sorted[0].time)) / 86400000) + 1) : 30;
+      const daily = periodDays > 0 ? smartCost / periodDays : 0;
+      const monthly = periodDays > 0 ? (smartCost / periodDays) * 30 : 0;
+      const compareDaily = periodDays > 0 ? smartCompareCost / periodDays : 0;
+      const compareMonthly = periodDays > 0 ? (smartCompareCost / periodDays) * 30 : 0;
+      const mergedEvCost = getMergedEvSessionsCost(filtered);
       const n = filtered.length;
-      const daily = sumDaily/n, monthly = sumMonthly/n, compareDaily = sumCompareDaily/n, compareMonthly = sumCompareMonthly/n;
-      const dailyEv = evMode ? 0 : (sumEvChargeHours > 0 ? (sumEvCost/sumEvChargeHours)*24 : 0);
-      const monthlyEv = dailyEv * 30;
-      const csv = "Report,Totals\nReadings," + n + "\nDaily Estimate ($)," + daily.toFixed(2) + "\nMonthly Estimate ($)," + monthly.toFixed(0) + "\nDaily EV estimate ($)," + dailyEv.toFixed(2) + "\nMonthly EV estimate ($)," + monthlyEv.toFixed(0) + "\nComparison Daily ($)," + compareDaily.toFixed(2) + "\nComparison Monthly ($)," + compareMonthly.toFixed(0) + "\nDaily Savings ($)," + (daily - compareDaily).toFixed(2) + "\nMonthly Savings ($)," + (monthly - compareMonthly).toFixed(0) + "\n";
+      let csv = "Report,Totals (smart time-weighted)\nReadings," + n + "\nTotal kWh," + smartKwh.toFixed(1) + "\nDaily Estimate ($)," + daily.toFixed(2) + "\nMonthly Estimate ($)," + monthly.toFixed(0) + "\nMerged EV cost ($)," + (evMode ? "0" : mergedEvCost.toFixed(2)) + "\nComparison Daily ($)," + compareDaily.toFixed(2) + "\nComparison Monthly ($)," + compareMonthly.toFixed(0) + "\nDaily Savings ($)," + (daily - compareDaily).toFixed(2) + "\nMonthly Savings ($)," + (monthly - compareMonthly).toFixed(0) + "\n";
+      if(settings.previousUsageKwh != null && settings.previousUsageKwh > 0){
+        const prevType = settings.previousUsageType || "monthly";
+        const prevKwhPerMonth = prevType === "quarterly" ? settings.previousUsageKwh / 3 : settings.previousUsageKwh;
+        const compareRate = settings.compareTariffType === "fixed" ? Number(settings.compareFixedRate || 0) : 0.25;
+        csv += "Previous usage (before Amp2$)," + settings.previousUsageKwh.toFixed(0) + " kWh/" + prevType + "\nPrevious cost at comparison rate ($/month)," + (prevKwhPerMonth * compareRate).toFixed(2) + "\n";
+      }
+      csv += "\n";
       const blob = new Blob([csv], {type:"text/csv"});
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
