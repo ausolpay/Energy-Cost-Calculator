@@ -1323,7 +1323,7 @@
     const now = new Date();
     let periodEnd, periodDays;
     if(monthFilter != null && monthFilter !== undefined){
-      const year = now.getFullYear();
+      const year = rows.length ? new Date(rows[0].time).getFullYear() : now.getFullYear();
       periodEnd = new Date(year, monthFilter + 1, 0, 23, 59, 59, 999);
       periodDays = new Date(year, monthFilter + 1, 0).getDate();
     } else {
@@ -1343,7 +1343,7 @@
     const smartAmpHrs = getSmartAmpHoursForReadings(rows, periodEnd);
 
     const daily = periodDays > 0 ? smartCost / periodDays : 0;
-    const monthly = smartCost;
+    const monthly = periodDays > 0 ? (smartCost / periodDays) * 30 : 0;
     const totalAvg = periodDays > 0 && periodDays * 24 > 0 ? smartCost / (periodDays * 24) : 0;
 
     let off = 0, peak = 0, shoulder = 0, fixed = 0;
