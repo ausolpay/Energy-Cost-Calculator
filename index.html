@@ -419,7 +419,7 @@
         <tr>
           <th style="width:18%;">Day</th>
           <th style="width:22%;">Date</th>
-          <th style="width:28%;">kW</th>
+          <th style="width:28%;">kWh</th>
           <th style="width:32%;">Cost</th>
         </tr>
       </thead>
@@ -427,7 +427,7 @@
     </table>
     <span class="label" style="margin-top:8px;">Show graph as</span>
     <select id="usageGraphMode">
-      <option value="kw">kW</option>
+      <option value="kw">kWh</option>
       <option value="cost">Cost</option>
     </select>
     <canvas id="usageChart" height="220"></canvas>
@@ -1050,6 +1050,20 @@
     }
     return cost;
   }
+  function getSmartCostForReadingsWithKWAndRate(readings, periodEnd, kwFn, rateFn){
+    if(!readings.length) return 0;
+    const sorted = readings.slice().sort((a,b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+    const endMs = periodEnd instanceof Date ? periodEnd.getTime() : new Date(periodEnd).getTime();
+    let cost = 0;
+    for(let i = 0; i < sorted.length; i++){
+      const r = sorted[i];
+      const t = new Date(r.time).getTime();
+      const nextT = i < sorted.length - 1 ? new Date(sorted[i+1].time).getTime() : endMs;
+      const durationHr = Math.max(0, (Math.min(nextT, endMs) - t)) / 3600000;
+      cost += (kwFn ? kwFn(r) : adjustedKW(r)) * (rateFn ? rateFn(r) : Number(r.rate || 0)) * durationHr;
+    }
+    return cost;
+  }
   function getSmartCompareCostForReadings(readings, periodEnd){
     return getSmartCostForReadingsWithRate(readings, periodEnd, r => getCompareRate(new Date(r.time)));
   }
@@ -1068,6 +1082,35 @@
       cost += evKw * Number(r.rate || 0) * durationHr;
     }
     return cost;
+  }
+  function getSmartEvKwhForReadings(readings, periodEnd){
+    if(!readings.length) return 0;
+    const sorted = readings.slice().sort((a,b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+    const endMs = periodEnd instanceof Date ? periodEnd.getTime() : new Date(periodEnd).getTime();
+    let kwh = 0;
+    for(let i = 0; i < sorted.length; i++){
+      const r = sorted[i];
+      const evKw = Number(r.ev || 0);
+      if(evKw <= 0) continue;
+      const t = new Date(r.time).getTime();
+      const nextT = i < sorted.length - 1 ? new Date(sorted[i+1].time).getTime() : endMs;
+      const durationHr = Math.max(0, (Math.min(nextT, endMs) - t)) / 3600000;
+      kwh += evKw * durationHr;
+    }
+    return kwh;
+  }
+  function getSmartKwhForReadingsWithKW(readings, periodEnd, kwFn){
+    if(!readings.length) return 0;
+    const sorted = readings.slice().sort((a,b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+    const endMs = periodEnd instanceof Date ? periodEnd.getTime() : new Date(periodEnd).getTime();
+    let kwh = 0;
+    for(let i = 0; i < sorted.length; i++){
+      const t = new Date(sorted[i].time).getTime();
+      const nextT = i < sorted.length - 1 ? new Date(sorted[i+1].time).getTime() : endMs;
+      const durationHr = Math.max(0, (Math.min(nextT, endMs) - t)) / 3600000;
+      kwh += (kwFn ? kwFn(sorted[i]) : adjustedKW(sorted[i])) * durationHr;
+    }
+    return kwh;
   }
 
   // ===== EV adjusters =====
@@ -1298,7 +1341,6 @@
       EV charge at your rate: ${evCostShow}<br>
       EV charge at comparison rate: ${compareEvShow}<br>
       ${evMode ? "" : evDiffShow + "<br>"}<br>
-      ${(settings.previousUsageKwh != null && settings.previousUsageKwh > 0) ? "<b>Before Amp2$</b><br>" + settings.previousUsageKwh.toFixed(0) + " kWh/" + (settings.previousUsageType || "monthly") + " → ~$" + ((settings.previousUsageType === "quarterly" ? settings.previousUsageKwh/3 : settings.previousUsageKwh) * (settings.compareTariffType === "fixed" ? Number(settings.compareFixedRate||0) : 0.25)).toFixed(2) + "/month at comparison rate<br><br>" : ""}
       Notes: ${(r.notes || "-").replace(/</g,"&lt;")}<br><br>
 
       <div class="detailsActions">
@@ -1344,6 +1386,8 @@
 
     const daily = periodDays > 0 ? smartCost / periodDays : 0;
     const monthly = periodDays > 0 ? (smartCost / periodDays) * 30 : 0;
+    const compareDaily = periodDays > 0 ? smartCompareCost / periodDays : 0;
+    const compareMonthly = periodDays > 0 ? (smartCompareCost / periodDays) * 30 : 0;
     const totalAvg = periodDays > 0 && periodDays * 24 > 0 ? smartCost / (periodDays * 24) : 0;
 
     let off = 0, peak = 0, shoulder = 0, fixed = 0;
@@ -1402,7 +1446,8 @@
       ${evMode ? "–" : "Merged sessions cost: $" + totalEvCost.toFixed(2)}<br><br>
 
       <b>Comparison (vs comparison tariff)</b><br>
-      Same usage at comparison rate: $${smartCompareCost.toFixed(2)} &nbsp; Savings: $${(smartCost - smartCompareCost).toFixed(2)}<br><br>
+      Comparison daily: $${compareDaily.toFixed(2)} &nbsp; monthly: $${compareMonthly.toFixed(0)}<br>
+      Savings daily: $${(daily - compareDaily).toFixed(2)} &nbsp; monthly: $${(monthly - compareMonthly).toFixed(0)}<br><br>
       ${prevUsageHtml}
     `;
   }
@@ -1414,8 +1459,7 @@
     const compareRate = settings.compareTariffType === "fixed" ? Number(settings.compareFixedRate || 0) : 0.25;
     const prevKwhPerMonth = prevType === "quarterly" ? prev / 3 : prev;
     const prevCostPerMonth = prevKwhPerMonth * compareRate;
-    const currentCostPerMonth = periodDays > 0 ? (currentCost / periodDays) * 30 : 0;
-    return `<b>Before Amp2$ (${prevType})</b><br>Previous: ${prev.toFixed(0)} kWh/${prevType} → ~$${prevCostPerMonth.toFixed(0)}/month at comparison rate<br>Current (smart): ${currentMonthlyKwh.toFixed(0)} kWh/month est. → $${currentCostPerMonth.toFixed(0)}/month<br><br>`;
+    return `<b>Before Amp2$</b><br>${prev.toFixed(0)} kWh/${prevType} → ~$${prevCostPerMonth.toFixed(2)}/month at comparison rate<br><br>`;
   }
 
   function getMergedEvSessionsCost(rows){
@@ -1436,7 +1480,7 @@
     Object.keys(byDate).forEach(dateStr => {
       const list = byDate[dateStr];
       const withWindow = list.filter(r => (r.evFrom || "").trim() && (r.evTo || "").trim());
-      if(withWindow.length === 0){ list.forEach(r => { sessions.push({ readings: [r], cost: computeEvCostForReading(r) }); }); return; }
+      if(withWindow.length === 0){ list.forEach(r => { sessions.push({ readings: [r], cost: computeEvCostForReading(r), evKwh: 0, startMin: 0, endMin: 0, lenMin: 1 }); }); return; }
       const s = parseTimeToMinutes(withWindow[0].evFrom);
       const e = parseTimeToMinutes(withWindow[0].evTo);
       const sameWindow = list.filter(r => {
@@ -1447,9 +1491,18 @@
       });
       const periodEnd = new Date(dateStr + "T23:59:59.999");
       const cost = getSmartEvCostForReadings(sameWindow, periodEnd);
-      sessions.push({ readings: sameWindow, cost });
+      const evKwh = getSmartEvKwhForReadings(sameWindow, periodEnd);
+      const startMin = s;
+      const endMin = e <= s ? e + 24*60 : e;
+      const lenMin = endMin - startMin;
+      sessions.push({ readings: sameWindow, cost, evKwh, startMin, endMin, lenMin: Math.max(1, lenMin) });
     });
     return sessions;
+  }
+  function overlapMinutes(aStart, aEnd, bStart, bEnd){
+    const start = Math.max(aStart, bStart);
+    const end = Math.min(aEnd, bEnd);
+    return Math.max(0, end - start);
   }
 
   // ===== Averages tab =====
@@ -1627,6 +1680,15 @@
     const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
     return new Date(y, m, d, 23, 59, 59, 999);
   }
+  function getPeriodBoundsMinutes(tariff){
+    const offStart = parseTime(settings.offStart);
+    const offEnd = parseTime(settings.offEnd);
+    const peakStart = parseTime(settings.peakStart);
+    const peakEnd = parseTime(settings.peakEnd);
+    if(tariff === "OffPeak") return [{ start: offStart, end: offEnd }];
+    if(tariff === "Peak") return [{ start: peakStart, end: peakEnd }];
+    return [{ start: 0, end: offStart }, { start: peakEnd, end: 24*60 }];
+  }
   function getDayPeriodEndForTariff(date, tariff){
     const y = date.getFullYear(), m = date.getMonth(), day = date.getDate();
     if(settings.tariffType === "fixed") return new Date(y, m, day, 23, 59, 59, 999);
@@ -1642,8 +1704,14 @@
     const dur = getTariffDurations();
 
     if(settings.tariffType === "fixed"){
-      const totalKw = getSmartKwhForReadings(dayReadings, dayEnd);
-      const totalCost = getSmartCostForReadings(dayReadings, dayEnd);
+      const houseKwFn = r => Math.max(0, Number(r.kw || 0) - Number(r.ev || 0));
+      const houseKwh = getSmartKwhForReadingsWithKW(dayReadings, dayEnd, houseKwFn);
+      const sessions = getMergedEvSessions(dayReadings);
+      let lockedEvKwh = 0, lockedEvCost = 0;
+      sessions.forEach(s => { lockedEvKwh += s.evKwh; lockedEvCost += s.cost; });
+      const totalKw = houseKwh + lockedEvKwh;
+      const houseCost = getSmartCostForReadingsWithKWAndRate(dayReadings, dayEnd, houseKwFn, r => getRate(new Date(r.time)));
+      const totalCost = houseCost + lockedEvCost;
       const fixKw = dur.shoulderHours > 0 ? totalKw / 24 : 0;
       return {
         date, dateStr, dayReadings,
@@ -1661,12 +1729,56 @@
     const peakEnd = getDayPeriodEndForTariff(date, "Peak");
     const shoulderEnd = dayEnd;
 
-    const offKwh = getSmartKwhForReadings(offReadings, offEnd);
-    const peakKwh = getSmartKwhForReadings(peakReadings, peakEnd);
-    const shoulderKwh = getSmartKwhForReadings(shoulderReadings, shoulderEnd);
-    const offCost = getSmartCostForReadings(offReadings, offEnd);
-    const peakCost = getSmartCostForReadings(peakReadings, peakEnd);
-    const shoulderCost = getSmartCostForReadings(shoulderReadings, shoulderEnd);
+    const sessions = getMergedEvSessions(dayReadings);
+    const houseKw = r => Math.max(0, Number(r.kw || 0) - Number(r.ev || 0));
+
+    function lockedInForPeriod(periodBounds, periodHours){
+      let evKwh = 0, evCost = 0;
+      sessions.forEach(s => {
+        if(!s.lenMin) return;
+        let overlap = 0;
+        periodBounds.forEach(seg => {
+          overlap += overlapMinutes(s.startMin, s.endMin, seg.start, seg.end);
+        });
+        const frac = overlap / s.lenMin;
+        evKwh += s.evKwh * frac;
+        evCost += s.cost * frac;
+      });
+      return { evKwh, evCost };
+    }
+    function houseAndCost(readings, periodEnd, periodHours){
+      if(!readings.length) return { houseKwh: 0, houseCost: 0 };
+      const onlyOne = readings.length === 1;
+      const r = readings[0];
+      const hasEv = onlyOne && Number(r.ev || 0) > 0 && (r.evFrom || "").trim() && (r.evTo || "").trim();
+      let houseKwh, houseCost;
+      if(onlyOne && hasEv){
+        houseKwh = houseKw(r) * periodHours;
+        houseCost = houseKwh * getRate(new Date(r.time));
+      } else {
+        houseKwh = getSmartKwhForReadingsWithKW(readings, periodEnd, houseKw);
+        houseCost = getSmartCostForReadingsWithKWAndRate(readings, periodEnd, houseKw, rd => getRate(new Date(rd.time)));
+      }
+      return { houseKwh, houseCost };
+    }
+
+    const offBounds = getPeriodBoundsMinutes("OffPeak");
+    const peakBounds = getPeriodBoundsMinutes("Peak");
+    const shoulderBounds = getPeriodBoundsMinutes("Shoulder");
+    const offLocked = lockedInForPeriod(offBounds, dur.offHours);
+    const peakLocked = lockedInForPeriod(peakBounds, dur.peakHours);
+    const shoulderLocked = lockedInForPeriod(shoulderBounds, dur.shoulderHours);
+
+    const offHouse = houseAndCost(offReadings, offEnd, dur.offHours);
+    const peakHouse = houseAndCost(peakReadings, peakEnd, dur.peakHours);
+    const shoulderHouse = houseAndCost(shoulderReadings, shoulderEnd, dur.shoulderHours);
+
+    const offKwh = offHouse.houseKwh + offLocked.evKwh;
+    const peakKwh = peakHouse.houseKwh + peakLocked.evKwh;
+    const shoulderKwh = shoulderHouse.houseKwh + shoulderLocked.evKwh;
+    const offCost = offHouse.houseCost + offLocked.evCost;
+    const peakCost = peakHouse.houseCost + peakLocked.evCost;
+    const shoulderCost = shoulderHouse.houseCost + shoulderLocked.evCost;
     const totalKw = offKwh + peakKwh + shoulderKwh;
     const totalCost = offCost + peakCost + shoulderCost;
     const offKw = dur.offHours > 0 ? offKwh / dur.offHours : 0;
@@ -1752,7 +1864,7 @@
       <b>Usage – ${dateStr}</b><br><br>
       Readings: ${dayData.dayReadings.length}<br><br>
       ${periodHTML}
-      <br>Total kW: ${dayData.totalKw.toFixed(2)}<br>
+      <br>Total kWh: ${dayData.totalKw.toFixed(2)}<br>
       Total cost: $${dayData.totalCost.toFixed(2)}
     `;
   }
@@ -1867,8 +1979,8 @@
     const colors = { off: "#4caf50", peak: "#f44336", shoulder: "#ff9800" };
     let actualMax = 0;
     data.forEach(d => {
-      if(d.isFixed) actualMax = Math.max(actualMax, isCost ? d.shoulderCost : d.shoulderKw);
-      else actualMax = Math.max(actualMax, isCost ? (d.offCost+d.peakCost+d.shoulderCost) : (d.offKw+d.peakKw+d.shoulderKw));
+      if(d.isFixed) actualMax = Math.max(actualMax, isCost ? d.totalCost : d.totalKw);
+      else actualMax = Math.max(actualMax, isCost ? (d.offCost+d.peakCost+d.shoulderCost) : d.totalKw);
     });
     const scaleMax = Math.max(maxY, actualMax * 1.1) || maxY;
 
@@ -1882,7 +1994,7 @@
       const x0 = leftPad + i * barW + (barW - segmentW * 3) / 2;
       const isToday = dayData.dateStr === todayStr;
       if(dayData.isFixed){
-        const v = isCost ? dayData.shoulderCost : dayData.shoulderKw;
+        const v = isCost ? dayData.shoulderCost : dayData.totalKw;
         const h = (v / scaleMax) * chartH;
         ctx.fillStyle = isToday ? "#6ab7ff" : "#4cafef";
         ctx.fillRect(x0, topPad + chartH - h, segmentW * 3, h);
